@@ -30,6 +30,13 @@
 - `ruff check` and `mypy --strict src/` must pass before every commit.
 - Commit after every task using the message given in that task's final step.
 
+## Amendments during execution
+
+Recorded as they happen, so the plan text and the branch stay honest.
+
+- **Task 1.** Ruff's `target-version` was lowered from `py312` to `py310`. At `py312` the `UP` rule set rejects all three mandated 3.10-compatible spellings (`UP042` on `class X(str, Enum)`, `UP017` on `timezone.utc`, `UP041` on `except asyncio.TimeoutError`), which would have failed the pre-commit lint gate from Task 2 onward. `requires-python` is unchanged at `>=3.12`; the two settings are independent.
+- **Task 1.** `SessionConfig`, `ContextConfig`, `RouterConfig`, `ExecutorConfig` and `Settings` gained `frozen=True`, which the task's original code block omitted. `RiskConfig` remains the single mutable model so `resolve_derived_paths` can assign `kill_switch_path`.
+
 ## Scope
 
 This plan covers steps 1–10 of the spec's build sequence — everything reachable without an external account. `DatabentoFeed` and the real `WebhookExecutor`/`NotifyExecutor` (spec steps 11–12) need vendor credentials and API docs, so they get their own plan once those exist. Completing this plan satisfies the spec's definition of done.
@@ -134,7 +141,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"  # deliberately below the 3.12 floor; see Global Constraints
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
