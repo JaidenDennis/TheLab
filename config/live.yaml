@@ -1,0 +1,9 @@
+executors:
+  - name: signaltradeapp
+    type: webhook
+    enabled: true
+    accounts: [tradeify, mff, fundednext]
+  - name: manual_lucid
+    type: notify
+    enabled: true
+    accounts: []

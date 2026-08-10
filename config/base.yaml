@@ -1,0 +1,18 @@
+symbol: NQ
+timeframes: [1m, 5m]
+data_dir: ./var
+session:
+  timezone: America/New_York
+  open: "09:30"
+  cutoff: "16:30"
+context:
+  history_bars: 500
+risk:
+  max_trades_per_day: 2
+  duplicate_window_seconds: 60
+  kill_switch_path: null
+router:
+  partial_fan: continue
+  executor_timeout_seconds: 5.0
+  notify_timeout_seconds: 3.0
+executors: []

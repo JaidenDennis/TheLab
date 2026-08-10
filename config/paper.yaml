@@ -1,0 +1,9 @@
+executors:
+  - name: dryrun_broker
+    type: dryrun
+    enabled: true
+    accounts: [tradeify, mff, fundednext]
+  - name: dryrun_notify
+    type: notify
+    enabled: true
+    accounts: []
