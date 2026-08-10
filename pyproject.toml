@@ -30,7 +30,14 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+# Deliberately py310, not py312: this only controls which syntax-modernization
+# (UP) suggestions ruff makes, not the minimum interpreter the code runs on
+# (see [project] requires-python). The test suite must run on Python 3.10, so
+# this stays at py310 to avoid ruff flagging the 3.10-compatible spellings the
+# plan requires (e.g. `class Direction(str, Enum)`, `timezone.utc`,
+# `except asyncio.TimeoutError`) as needing 3.12-only replacements. Do not
+# "correct" this to match requires-python.
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

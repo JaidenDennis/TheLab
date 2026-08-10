@@ -5,35 +5,49 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_CONFIG = Path("config/base.yaml")
 
 
 class SessionConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     timezone: str = "America/New_York"
     open: time = time(9, 30)
     cutoff: time = time(16, 30)
 
 
 class ContextConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     history_bars: int = 500
 
 
 class RiskConfig(BaseModel):
+    """Deliberately the one unfrozen config model.
+
+    `Settings.resolve_derived_paths` assigns to `self.risk.kill_switch_path`
+    after construction, so this model cannot be frozen like its siblings.
+    """
+
     max_trades_per_day: int = 2
     duplicate_window_seconds: int = 60
     kill_switch_path: Path | None = None
 
 
 class RouterConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     partial_fan: Literal["continue", "alert_only"] = "continue"
     executor_timeout_seconds: float = 5.0
     notify_timeout_seconds: float = 3.0
 
 
 class ExecutorConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
     type: Literal["webhook", "notify", "dryrun"]
     enabled: bool = True
@@ -46,6 +60,7 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
         env_file=".env",
         extra="ignore",
+        frozen=True,
     )
 
     symbol: str = "NQ"
