@@ -52,7 +52,11 @@ class ReplayFeed(DataFeed):
         collected: list[Bar] = []
         for tick in self._ticks():
             collected.extend(aggregator.add_tick(tick))
-        collected.extend(aggregator.flush())
+        # get_bars is documented ("Historical closed bars") the same as
+        # stream(): flush()'s trailing bucket may be genuinely partial (see
+        # its docstring), and this contract does not get to hand that out
+        # just because it is the last one in the requested window.
+        collected.extend(bar for bar in aggregator.flush() if bar.closed)
         return [bar for bar in collected if start <= bar.open_time < end]
 
     async def stream(
@@ -67,6 +71,12 @@ class ReplayFeed(DataFeed):
                     self._clock.advance_to(bar.close_time)
                 yield bar
         for bar in aggregator.flush():
+            # DataFeed promises closed bars only (see its docstring). The
+            # fixture ending mid-bucket does not get an exception to that --
+            # flush() marks exactly that bucket closed=False, so it is
+            # dropped here rather than yielded as if it were a real bar.
+            if not bar.closed:
+                continue
             if self._clock is not None:
                 self._clock.advance_to(bar.close_time)
             yield bar

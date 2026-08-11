@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from nq_agent.models import TIMEFRAME_SECONDS, Bar, Tick
@@ -53,7 +53,7 @@ class BarAggregator:
         self._builders: dict[str, _Builder | None] = dict.fromkeys(self._timeframes)
         self._last_ts: datetime | None = None
 
-    def _finish(self, timeframe: str, builder: _Builder) -> Bar:
+    def _finish(self, timeframe: str, builder: _Builder, *, closed: bool = True) -> Bar:
         return Bar(
             symbol=self._symbol,
             timeframe=timeframe,
@@ -63,7 +63,7 @@ class BarAggregator:
             low=builder.low,
             close=builder.close,
             volume=builder.volume,
-            closed=True,
+            closed=closed,
         )
 
     def _ordered(self, bars: list[Bar]) -> list[Bar]:
@@ -107,10 +107,33 @@ class BarAggregator:
         return self._ordered(closed)
 
     def flush(self) -> list[Bar]:
+        """Force-close every open bucket, whether or not its window has
+        actually elapsed.
+
+        A bucket flush() finds open is, by construction, one add_tick never
+        rolled over -- no tick at or past its close_time ever arrived, or
+        add_tick would have closed it already. That means the bar this
+        produces is only genuinely closed if the caller has other grounds to
+        believe no more ticks are coming and time has actually moved past
+        close_time; flush() itself only knows the tick stream stopped, not
+        that the clock did. So each bucket here is marked `closed` only when
+        its close_time is at or before the last tick actually seen -- for a
+        single, uninterrupted tick stream that is never true (a bucket still
+        open after the last tick necessarily has a close_time later than
+        that tick), so in practice flush() marks everything it emits as
+        partial. That is deliberate, not dead code: it is what stops "bars
+        are emitted only when closed" from being silently violated by a
+        stream that just happens to end mid-bucket. Callers that explicitly
+        want the partial (this method) can still have it; callers bound by
+        the "closed bars only" contract (DataFeed.stream, DataFeed.get_bars)
+        must filter on `.closed` before yielding what this returns.
+        """
         closed: list[Bar] = []
         for timeframe in self._timeframes:
             builder = self._builders[timeframe]
             if builder is not None:
-                closed.append(self._finish(timeframe, builder))
+                close_time = builder.open_time + timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
+                is_closed = self._last_ts is not None and close_time <= self._last_ts
+                closed.append(self._finish(timeframe, builder, closed=is_closed))
                 self._builders[timeframe] = None
         return self._ordered(closed)

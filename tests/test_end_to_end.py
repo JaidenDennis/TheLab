@@ -698,6 +698,14 @@ def two_minute_session_settings(tmp_path: Path) -> tuple[Path, Path]:
                 # (09:32 America/New_York, configured below) -- the coincidence this
                 # test exists to force.
                 json.dumps({"ts": "2026-07-15T13:31:30+00:00", "price": "98.00", "size": 1}),
+                # Closing tick: without one at/after 13:32:00, bar 2 never closes via
+                # ordinary rollover, and BarAggregator.flush() now (correctly) reports
+                # a bucket like that as closed=False rather than fabricating a closed
+                # bar out of an incomplete one -- ReplayFeed.stream then drops it, and
+                # this test would never see bar 2 at all. Its own price does not matter:
+                # it only triggers bar 2's rollover and opens a fresh (also partial,
+                # also dropped) bar 3 that nothing here reads.
+                json.dumps({"ts": "2026-07-15T13:32:00+00:00", "price": "98.00", "size": 1}),
             ]
         )
         + "\n"

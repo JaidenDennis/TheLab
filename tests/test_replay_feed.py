@@ -58,11 +58,45 @@ async def test_get_bars_returns_the_requested_window_only() -> None:
     assert all(bar.timeframe == "1m" for bar in bars)
 
 
-async def test_final_partial_bucket_is_flushed() -> None:
+async def test_the_sessions_final_bar_reaches_the_true_close() -> None:
+    """Was test_final_partial_bucket_is_flushed: the fixture used to end five
+    seconds short of ever closing its last 1m bucket, so this only passed
+    because flush() fabricated a closed bar out of an incomplete one. The
+    fixture now carries one real closing tick at 20:30:00 UTC (see
+    make_fixture.py), so the last bar closes via ordinary rollover, same as
+    every other bar -- nothing here is flushed anymore. Renamed accordingly;
+    see test_a_bucket_left_open_by_the_last_tick_is_not_yielded below for
+    the actual partial-bucket-dropping behaviour this pins.
+    """
     feed = ReplayFeed(FIXTURE, "NQ")
     bars = [bar async for bar in feed.stream("NQ", ["1m"])]
     await feed.close()
     assert bars[-1].close_time == CLOSE
+    assert bars[-1].closed is True
+
+
+async def test_a_bucket_left_open_by_the_last_tick_is_not_yielded(tmp_path: Path) -> None:
+    """Required addition (Minor 1, second half): DataFeed promises closed
+    bars only. A tick stream ending mid-bucket must not produce a bar for
+    that bucket at all -- confirmed here with a fixture built to end
+    mid-minute, deliberately, unlike the real fixture above.
+    """
+    ticks = tmp_path / "ticks.jsonl"
+    ticks.write_text(
+        "\n".join(
+            [
+                '{"ts": "2026-07-15T13:30:00+00:00", "price": "100.00", "size": 1}',
+                '{"ts": "2026-07-15T13:30:30+00:00", "price": "101.00", "size": 1}',
+            ]
+        )
+        + "\n"
+    )
+    feed = ReplayFeed(ticks, "NQ")
+
+    bars = [bar async for bar in feed.stream("NQ", ["1m"])]
+    await feed.close()
+
+    assert bars == [], "the only bucket here never saw a tick at or after its close_time"
 
 
 async def test_resume_from_is_accepted_and_ignored_by_replay() -> None:

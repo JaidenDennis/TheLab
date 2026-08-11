@@ -209,3 +209,56 @@ def test_ordered_puts_the_shorter_timeframe_first() -> None:
 
     assert [b.timeframe for b in agg._ordered([five, one])] == ["1m", "5m"]
     assert [b.timeframe for b in agg._ordered([one, five])] == ["1m", "5m"]
+
+
+# --- Required addition: Minor 1 -- flush() must not fabricate a closed bar
+# out of a bucket that never actually closed. "Bars are emitted only when
+# closed" is the invariant every lookahead bug starts from, and flush() used
+# to hardcode closed=True regardless of whether a tick at or after the
+# bucket's close_time had ever actually been seen.
+
+
+def test_flush_marks_a_genuinely_partial_bucket_as_not_closed() -> None:
+    agg = BarAggregator("NQ", ["1m"])
+    agg.add_tick(tick(10, "20100"))  # last tick at START+10s, bucket closes at START+60s
+
+    bars = agg.flush()
+    assert len(bars) == 1
+    assert bars[0].closed is False, (
+        "no tick at or after this bucket's close_time was ever seen -- it is not closed"
+    )
+    # flush() still hands the partial back, OHLCV and all, for a caller that wants it.
+    assert bars[0].close == Decimal("20100")
+    assert bars[0].volume == 1
+
+
+def test_flush_marks_every_timeframes_partial_bucket_as_not_closed() -> None:
+    """The same check as above, across more than one timeframe at once --
+    flush() must not special-case a single bucket; every timeframe's own
+    close_time is compared against the same last tick seen.
+    """
+    agg = BarAggregator("NQ", ["1m", "5m"])
+    agg.add_tick(tick(10, "20100"))
+
+    bars = agg.flush()
+    assert len(bars) == 2
+    assert all(bar.closed is False for bar in bars), (
+        "neither the 1m nor the 5m bucket has seen a tick at or after its own close_time"
+    )
+
+
+def test_flush_after_a_rollover_still_reports_the_new_bucket_as_partial() -> None:
+    """A bucket add_tick closes on its own is correctly closed=True (see
+    test_bar_ohlcv_is_correct_on_close); the *next* bucket that same tick
+    opens is a fresh, genuinely partial one, and flush() must not conflate
+    "a rollover just happened" with "the new bucket is closed too."
+    """
+    agg = BarAggregator("NQ", ["1m"])
+    agg.add_tick(tick(10, "20100"))
+    rolled = agg.add_tick(tick(60, "20106"))
+    assert rolled[0].closed is True
+
+    bars = agg.flush()
+    assert len(bars) == 1
+    assert bars[0].open_time == START + timedelta(seconds=60)
+    assert bars[0].closed is False

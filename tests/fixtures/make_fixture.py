@@ -41,6 +41,29 @@ def main() -> None:
                     + "\n"
                 )
 
+        # One closing tick at the session's true end (16:30 America/New_York
+        # / 20:30 UTC), so the final 1m and 5m buckets close via ordinary
+        # aggregator rollover instead of being left open. Without it the
+        # last real tick is at 20:29:55 -- five seconds short of ever
+        # closing the 20:29-20:30 bucket -- and BarAggregator.flush() now
+        # correctly reports that bucket as closed=False rather than
+        # fabricating a closed bar out of an incomplete one (see Minor 1 in
+        # the whole-branch review). This tick itself starts a fresh, still-
+        # partial bucket that is dropped the same way; it never lands
+        # inside any bar this fixture actually emits.
+        closing_ts = SESSION_OPEN + timedelta(minutes=SESSION_MINUTES)
+        price += TICK_SIZE * rng.randint(-4, 4)
+        handle.write(
+            json.dumps(
+                {
+                    "ts": closing_ts.isoformat(),
+                    "price": str(price),
+                    "size": rng.randint(1, 5),
+                }
+            )
+            + "\n"
+        )
+
     print(f"wrote {out}")
 
 
