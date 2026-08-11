@@ -35,13 +35,13 @@ class VetoReason(str, Enum):
     SESSION_CLOSED = "SESSION_CLOSED"
 
 
-def _require_utc(value: datetime) -> datetime:
+def require_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(timezone.utc)
 
 
-UtcDatetime = Annotated[datetime, AfterValidator(_require_utc)]
+UtcDatetime = Annotated[datetime, AfterValidator(require_utc)]
 """A datetime that must arrive timezone-aware and is normalised to UTC.
 
 Declared once and reused so a new datetime field cannot silently opt out of

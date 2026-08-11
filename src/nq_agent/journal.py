@@ -11,22 +11,30 @@ from typing import Any
 from pydantic import BaseModel
 
 from nq_agent.clock import Clock
+from nq_agent.models import require_utc
 
 
 def _encode(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return require_utc(value).isoformat()
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        # mode="python" keeps Decimal, datetime and Enum as objects so they come
+        # back through this encoder. mode="json" would render datetimes as RFC3339
+        # "Z", which datetime.fromisoformat cannot parse before Python 3.11 and
+        # which disagrees with the "+00:00" every other datetime here produces.
+        return value.model_dump(mode="python")
     if isinstance(value, Path):
         return str(value)
     raise TypeError(f"cannot serialise {type(value).__name__} for the journal")
+
+
+RESERVED_KEYS = ("ts", "event")
 
 
 class Journal:
@@ -49,7 +57,15 @@ class Journal:
             handle.write(line + "\n")
 
     async def write(self, event: str, session_date: date, **payload: Any) -> None:
+        reserved = [key for key in RESERVED_KEYS if key in payload]
+        if reserved:
+            raise ValueError(
+                f"payload keys {reserved} are reserved by the journal; "
+                "rename them rather than overwriting record metadata"
+            )
         record: dict[str, Any] = {"ts": self._clock.now().isoformat(), "event": event}
         record.update(payload)
-        line = json.dumps(record, default=_encode)
+        # allow_nan=False: NaN and Infinity are not valid JSON and would silently
+        # produce a line that strict non-Python consumers cannot parse.
+        line = json.dumps(record, default=_encode, allow_nan=False)
         await asyncio.to_thread(self._append, self.path_for(session_date), line)
