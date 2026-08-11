@@ -78,6 +78,7 @@ class Engine:
         risk: RiskManager,
         state_store: StateStore,
         resume_from: datetime | None = None,
+        backfill_until: datetime | None = None,
         resume_position: Position | None = None,
         trades_taken: int = 0,
         resumed_session_date: date | None = None,
@@ -94,6 +95,13 @@ class Engine:
         self._risk = risk
         self._state = state_store
         self._resume_from = resume_from
+        # backfill_until is the wall-clock moment a live feed's own catch-up
+        # (resume_from -> now) ends. None means there is no such window --
+        # the replay case, where a restart is a deterministic continuation
+        # of the same fixture rather than a gap that needs to be caught up.
+        # See feed/base.py's stream() docstring for the three windows this
+        # and resume_from together define.
+        self._backfill_until = backfill_until
         self._max_bars = max_bars
         self._tracker = PositionTracker()
         self._tracker.restore(resume_position)
@@ -229,12 +237,43 @@ class Engine:
                 logger.warning("health check failed for %s", executor.name)
 
         processed = 0
+        skipped = 0
         async for bar in self._feed.stream(
             self.settings.symbol, self.settings.timeframes, self._resume_from
         ):
-            warmup = self._resume_from is not None and bar.close_time <= self._resume_from
+            # Three windows, not two -- see feed/base.py's stream() docstring.
+            # 1. skip: close_time <= resume_from. Already reflected in the
+            #    state restore_state/PositionTracker.restore just rebuilt.
+            #    Processing it again would double-count it.
+            # 2. warmup: past resume_from, at or before backfill_until (a
+            #    live feed's real downtime gap). Strategy and tracker run for
+            #    real so in-memory state catches up, but any signal's moment
+            #    has already passed, so it is suppressed rather than routed.
+            # 3. live: everything else. ReplayFeed never sets backfill_until,
+            #    so window 2 is empty for it and every post-resume_from bar
+            #    lands directly in this one, by design.
+            skip = self._resume_from is not None and bar.close_time <= self._resume_from
+            warmup = (
+                not skip
+                and self._backfill_until is not None
+                and bar.close_time <= self._backfill_until
+            )
             self._context.set_warmup(warmup)
             self._last_bar_time = bar.close_time
+
+            if skip:
+                skipped += 1
+                # Still let SessionManager see the bar: session adoption (and
+                # a same-run rollover the skip window happens to cross) reads
+                # current_session_date off it, and the call has no strategy
+                # or position side effect of its own. Any flatten signal it
+                # returns here is for a bar already reflected in the state
+                # already restored, so it is discarded rather than handled.
+                await self._session.on_bar(bar, self._tracker.position)
+                processed += 1
+                if self._max_bars is not None and processed >= self._max_bars:
+                    break
+                continue
 
             closed = self._tracker.on_bar(bar)
             flatten_signal = await self._session.on_bar(bar, self._tracker.position)
@@ -267,6 +306,11 @@ class Engine:
             if self._max_bars is not None and processed >= self._max_bars:
                 break
 
+        if skipped:
+            session_date = self._session.current_session_date
+            if session_date is not None:
+                await self._journal.write("backfill_skipped", session_date, count=skipped)
+
         await self._session.end_session()
         await self._feed.close()
 
@@ -277,7 +321,18 @@ async def run_from_config(
     strategy_name: str,
     max_bars: int | None,
     strategy_override: Strategy | None = None,
+    backfill_until: datetime | None = None,
 ) -> Engine:
+    """Load config, restore prior state if any, and run one session.
+
+    `strategy_override` exists so tests can inject a strategy the CLI has no
+    name for. `backfill_until` exists so tests can exercise the warmup window
+    (window 2 of Engine.run's three -- see there) without a live feed to
+    produce it: production callers leave it None, since ReplayFeed always
+    replays from the top and ignores resume_from, and a live feed does not
+    exist in this build yet. A live feed will set it to the wall-clock time
+    streaming began. Production paths always go through build_strategy.
+    """
     settings = load_settings(config_path)
     strategy = strategy_override or build_strategy(strategy_name)
 
@@ -335,6 +390,7 @@ async def run_from_config(
         risk=risk,
         state_store=state_store,
         resume_from=resume_from,
+        backfill_until=backfill_until,
         resume_position=resume_position,
         trades_taken=trades_taken,
         resumed_session_date=resumed_session_date,
