@@ -257,3 +257,49 @@ def test_duplicate_executor_names_are_rejected(tmp_path: Path) -> None:
             1.0,
             "continue",
         )
+
+
+class RendezvousExecutor(Executor):
+    """Succeeds only if every sibling reaches execute() before any returns.
+
+    A timing assertion would flake. This deadlocks instead: if the router runs
+    brokers sequentially, the first one waits for an arrival count that cannot
+    grow, its wait_for expires, and the router reports a timeout. Concurrency
+    is therefore the only way for all of these to come back successful.
+    """
+
+    arrived = 0
+    all_here = None  # type: ignore[var-annotated]
+
+    def __init__(self, name: str, expected: int) -> None:
+        self.name = name
+        self.account_id = name
+        self.enabled = True
+        self._expected = expected
+
+    async def execute(self, sig: Signal) -> OrderResult:
+        RendezvousExecutor.arrived += 1
+        assert RendezvousExecutor.all_here is not None
+        if RendezvousExecutor.arrived == self._expected:
+            RendezvousExecutor.all_here.set()
+        await asyncio.wait_for(RendezvousExecutor.all_here.wait(), timeout=2.0)
+        return OrderResult(signal_id=sig.id, executor_name=self.name, success=True)
+
+    async def health_check(self) -> bool:
+        return True
+
+
+async def test_brokers_run_concurrently_not_sequentially(tmp_path: Path) -> None:
+    RendezvousExecutor.arrived = 0
+    RendezvousExecutor.all_here = asyncio.Event()
+    brokers = [RendezvousExecutor(f"broker{i}", expected=4) for i in range(4)]
+
+    router = Router(brokers, journal(tmp_path), 5.0, 5.0, "continue")
+    results = await router.dispatch(signal(), SESSION)
+
+    assert len(results) == 4
+    assert all(r.success for r in results), (
+        "a sequential fan-out cannot satisfy the rendezvous; "
+        f"got {[(r.executor_name, r.error) for r in results]}"
+    )
+    assert RendezvousExecutor.arrived == 4

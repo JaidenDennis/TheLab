@@ -139,6 +139,7 @@ class Router:
                         executor_name=executor.name,
                         success=False,
                         account_id=executor.account_id,
+                        latency_ms=int(timeout * 1000),
                         error=f"{type(outcome).__name__}: {outcome}",
                     )
                 )
