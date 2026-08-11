@@ -91,6 +91,9 @@ async def test_nan_and_infinity_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         await journal.write("bad", date(2026, 7, 15), value=float("nan"))
 
+    with pytest.raises(ValueError):
+        await journal.write("bad", date(2026, 7, 15), value=float("inf"))
+
 
 async def test_unserialisable_payload_raises_before_touching_disk(tmp_path: Path) -> None:
     journal = Journal(tmp_path, SimClock(datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc)))
