@@ -2,6 +2,8 @@ from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from nq_agent.clock import SessionCalendar
 from nq_agent.models import Direction, Signal, SignalIntent, VetoReason
 from nq_agent.risk.accounts import AccountRegistry
@@ -162,3 +164,41 @@ def test_account_registry_rereads_the_file(tmp_path: Path) -> None:
 def test_missing_account_file_returns_none_meaning_no_overrides(tmp_path: Path) -> None:
     registry = AccountRegistry(tmp_path / "absent.yaml")
     assert registry.enabled_accounts() is None
+
+
+def test_account_registry_rejects_a_quoted_boolean(tmp_path: Path) -> None:
+    """"false" is a truthy string; a truthiness cast would enable the account."""
+    config = tmp_path / "accounts.yaml"
+    config.write_text('tradeify: true\nfundednext: "false"\n')
+
+    with pytest.raises(ValueError, match="must be true or false"):
+        AccountRegistry(config).enabled_accounts()
+
+
+def test_account_registry_accepts_yaml_boolean_idioms(tmp_path: Path) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text("tradeify: yes\nmff: no\nfundednext: off\ntopstep: on\n")
+    assert AccountRegistry(config).enabled_accounts() == {"tradeify", "topstep"}
+
+
+def test_account_registry_rejects_a_non_mapping(tmp_path: Path) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text("- tradeify\n- mff\n")
+
+    with pytest.raises(ValueError, match="must contain a mapping"):
+        AccountRegistry(config).enabled_accounts()
+
+
+def test_empty_account_file_disables_everything(tmp_path: Path) -> None:
+    """Deliberately asymmetric with a missing file: truncation must fail closed."""
+    config = tmp_path / "accounts.yaml"
+    config.write_text("")
+    assert AccountRegistry(config).enabled_accounts() == set()
+
+
+def test_recent_signals_are_pruned_without_an_intervening_check(tmp_path: Path) -> None:
+    risk = manager(tmp_path / "halt", window=60)
+    for offset in range(0, 600, 10):
+        risk.record_accepted(entry(at=IN_SESSION + timedelta(seconds=offset)))
+
+    assert len(risk._recent) <= 7

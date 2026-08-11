@@ -27,9 +27,12 @@ class RiskManager:
         self._kill_switch_path = kill_switch_path
         self._recent: list[tuple[datetime, str, Direction]] = []
 
-    def _is_duplicate(self, signal: Signal) -> bool:
-        cutoff = signal.timestamp - self._window
+    def _prune(self, now: datetime) -> None:
+        cutoff = now - self._window
         self._recent = [entry for entry in self._recent if entry[0] > cutoff]
+
+    def _is_duplicate(self, signal: Signal) -> bool:
+        self._prune(signal.timestamp)
         return any(
             symbol == signal.symbol and direction == signal.direction
             for _, symbol, direction in self._recent
@@ -38,6 +41,9 @@ class RiskManager:
     def record_accepted(self, signal: Signal) -> None:
         if signal.intent is SignalIntent.ENTRY:
             self._recent.append((signal.timestamp, signal.symbol, signal.direction))
+            # Prune here too: pruning only inside check() would let _recent grow
+            # without bound if a caller ever records without checking first.
+            self._prune(signal.timestamp)
 
     def check(
         self, signal: Signal, trades_taken: int, enabled_executor_count: int

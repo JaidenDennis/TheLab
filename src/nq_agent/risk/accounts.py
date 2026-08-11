@@ -24,4 +24,18 @@ class AccountRegistry:
         loaded = yaml.safe_load(self._path.read_text()) or {}
         if not isinstance(loaded, dict):
             raise ValueError(f"account config must contain a mapping: {self._path}")
-        return {name for name, enabled in loaded.items() if bool(enabled)}
+
+        enabled: set[str] = set()
+        for name, value in loaded.items():
+            if not isinstance(value, bool):
+                # A truthiness cast would read the quoted string "false" as
+                # enabled, silently inverting an operator's intent to switch an
+                # account off. On a control that exists to stop trading, reject
+                # anything that is not an actual boolean.
+                raise ValueError(
+                    f"account {name!r} must be true or false, got {value!r} "
+                    f"({type(value).__name__}) in {self._path}"
+                )
+            if value:
+                enabled.add(str(name))
+        return enabled
