@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 from datetime import time
 from pathlib import Path
 from typing import Any, Literal
@@ -111,6 +112,51 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def _as_model(annotation: Any) -> type[BaseModel] | None:
+    """The BaseModel a field's annotation names, if it names one directly.
+
+    Unwraps nothing else -- `RiskConfig` matches, `list[RiskConfig]` and
+    `RiskConfig | None` do not (those are handled by the two call sites in
+    _validate_known_keys, which know whether they are looking at a mapping
+    or a list of them).
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    return None
+
+
+def _validate_known_keys(data: dict[str, Any], model: type[BaseModel], section: str) -> None:
+    """Reject a YAML key that does not correspond to a real field on `model`.
+
+    Settings uses extra="ignore" so pydantic-settings can layer environment
+    variables over YAML without every legacy env var needing a matching
+    field -- flipping that would break the env-var path this exists to
+    protect. But the same setting silently swallows a YAML typo: a
+    misspelled max_trades_per_day would just fall back to the default limit
+    with no error, on a value that is a risk control, not a preference. This
+    walks the merged YAML tree instead, where a typo has no legitimate
+    reason to exist, and is called before Settings(**data) ever sees it.
+    """
+    fields = model.model_fields
+    for key, value in data.items():
+        field = fields.get(key)
+        if field is None:
+            raise ValueError(f"unknown config key {key!r} in section {section!r}")
+
+        nested = _as_model(field.annotation)
+        if nested is not None and isinstance(value, dict):
+            _validate_known_keys(value, nested, section=key)
+            continue
+
+        if typing.get_origin(field.annotation) is list and isinstance(value, list):
+            args = typing.get_args(field.annotation)
+            item_model = _as_model(args[0]) if args else None
+            if item_model is not None:
+                for item in value:
+                    if isinstance(item, dict):
+                        _validate_known_keys(item, item_model, section=f"{key}[]")
+
+
 def load_settings(config_path: Path) -> Settings:
     """Layer base.yaml under the given config, then let env vars supply secrets.
 
@@ -120,4 +166,5 @@ def load_settings(config_path: Path) -> Settings:
     data = _read_yaml(BASE_CONFIG)
     if config_path.resolve() != BASE_CONFIG.resolve():
         data = _deep_merge(data, _read_yaml(config_path))
+    _validate_known_keys(data, Settings, section="<top level>")
     return Settings(**data)
