@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TIMEFRAME_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -41,26 +41,30 @@ def _require_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+UtcDatetime = Annotated[datetime, AfterValidator(_require_utc)]
+"""A datetime that must arrive timezone-aware and is normalised to UTC.
+
+Declared once and reused so a new datetime field cannot silently opt out of
+the UTC contract by forgetting its validator.
+"""
+
+
 class Frozen(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
 class Tick(Frozen):
     symbol: str
-    ts: datetime
+    ts: UtcDatetime
     price: Decimal
     size: int
 
-    @field_validator("ts")
-    @classmethod
-    def _utc(cls, value: datetime) -> datetime:
-        return _require_utc(value)
 
 
 class Bar(Frozen):
     symbol: str
     timeframe: str
-    open_time: datetime
+    open_time: UtcDatetime
     open: Decimal
     high: Decimal
     low: Decimal
@@ -68,10 +72,6 @@ class Bar(Frozen):
     volume: int
     closed: bool = True
 
-    @field_validator("open_time")
-    @classmethod
-    def _utc(cls, value: datetime) -> datetime:
-        return _require_utc(value)
 
     @field_validator("timeframe")
     @classmethod
@@ -87,7 +87,7 @@ class Bar(Frozen):
 
 class Signal(Frozen):
     id: str = Field(default_factory=lambda: uuid4().hex)
-    timestamp: datetime
+    timestamp: UtcDatetime
     symbol: str
     intent: SignalIntent = SignalIntent.ENTRY
     direction: Direction
@@ -98,10 +98,6 @@ class Signal(Frozen):
     reason: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("timestamp")
-    @classmethod
-    def _utc(cls, value: datetime) -> datetime:
-        return _require_utc(value)
 
     @model_validator(mode="after")
     def _check_intent_prices(self) -> Signal:
@@ -138,26 +134,18 @@ class Position(Frozen):
     direction: Direction
     quantity: int
     entry_price: Decimal
-    entry_time: datetime
+    entry_time: UtcDatetime
     stop_price: Decimal
     target_price: Decimal
 
-    @field_validator("entry_time")
-    @classmethod
-    def _utc(cls, value: datetime) -> datetime:
-        return _require_utc(value)
 
 
 class PositionClose(Frozen):
     position: Position
     exit_price: Decimal
-    exit_time: datetime
+    exit_time: UtcDatetime
     exit_reason: str
 
-    @field_validator("exit_time")
-    @classmethod
-    def _utc(cls, value: datetime) -> datetime:
-        return _require_utc(value)
 
 
 class SessionState(Frozen):
@@ -165,7 +153,7 @@ class SessionState(Frozen):
     trades_taken: int = 0
     is_halted: bool = False
     strategy_state: dict[str, Any] = Field(default_factory=dict)
-    last_bar_time: datetime | None = None
+    last_bar_time: UtcDatetime | None = None
     position: Position | None = None
 
 

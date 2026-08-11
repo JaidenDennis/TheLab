@@ -37,6 +37,7 @@ Recorded as they happen, so the plan text and the branch stay honest.
 - **Task 1.** Ruff's `target-version` was lowered from `py312` to `py310`. At `py312` the `UP` rule set rejects all three mandated 3.10-compatible spellings (`UP042` on `class X(str, Enum)`, `UP017` on `timezone.utc`, `UP041` on `except asyncio.TimeoutError`), which would have failed the pre-commit lint gate from Task 2 onward. `requires-python` is unchanged at `>=3.12`; the two settings are independent.
 - **Task 1.** `SessionConfig`, `ContextConfig`, `RouterConfig`, `ExecutorConfig` and `Settings` gained `frozen=True`, which the task's original code block omitted. `RiskConfig` remains the single mutable model so `resolve_derived_paths` can assign `kill_switch_path`.
 - **Task 2.** The task's `tests/test_models.py` imported `Tick` but asserted nothing against it, so `ruff` flagged the import as unused (`F401`). Rather than silence it with a `noqa`, two real tests were added covering `Tick`'s UTC normalisation and frozen-ness, matching the coverage every other model in the file gets.
+- **Task 2.** `SessionState.last_bar_time` was missing the UTC validator its five sibling datetime fields had, so it silently accepted naive datetimes. Fixed structurally: `models.py` now declares `UtcDatetime = Annotated[datetime, AfterValidator(_require_utc)]` once and all six datetime fields use it, replacing five hand-written validators. A new datetime field is now UTC-enforced by its type rather than by remembering to add a validator.
 
 ## Scope
 

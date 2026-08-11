@@ -174,6 +174,22 @@ def test_position_close_carries_exit_detail() -> None:
     assert closed.exit_reason == "STOP"
 
 
+def test_session_state_rejects_naive_last_bar_time() -> None:
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        SessionState(
+            session_date=date(2026, 7, 15),
+            last_bar_time=datetime(2026, 7, 15, 15, 0),
+        )
+
+
+def test_session_state_normalises_aware_last_bar_time_to_utc() -> None:
+    state = SessionState(
+        session_date=date(2026, 7, 15),
+        last_bar_time=datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc),
+    )
+    assert state.last_bar_time == datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc)
+
+
 def test_session_state_defaults_are_empty() -> None:
     state = SessionState(session_date=date(2026, 7, 15))
     assert state.trades_taken == 0
