@@ -81,13 +81,18 @@ class Engine:
         backfill_until: datetime | None = None,
         resume_position: Position | None = None,
         trades_taken: int = 0,
+        is_halted: bool = False,
         resumed_session_date: date | None = None,
         max_bars: int | None = None,
     ) -> None:
         self.settings = settings
         self.strategy = strategy
         self.trades_taken = trades_taken
-        self.is_halted = False
+        # Restored from prior.is_halted on resume by run_from_config, not
+        # hardcoded -- a strategy that halted before a crash must not come
+        # back up silently un-halted. Reset to False on a genuine session
+        # rollover, alongside trades_taken -- see run()'s rollover check.
+        self.is_halted = is_halted
         self._feed = feed
         self._calendar = calendar
         self._journal = journal
@@ -230,6 +235,25 @@ class Engine:
             )
             return None
 
+    def _reset_after_rollover(self, prior_session_date: date | None) -> None:
+        """Zero the day-scoped counters when SessionManager's on_bar call just
+        rolled the session date over.
+
+        trades_taken and is_halted live on Engine; SessionManager owns the day
+        boundary and exposes it only through current_session_date, so this is
+        a before/after comparison around each call to session.on_bar rather
+        than a signal SessionManager pushes. `prior_session_date is None`
+        means this is the engine's first-ever bar (a cold start, or the one
+        adoption/start that turns a resume into a running session) rather
+        than a rollover -- trades_taken/is_halted are already exactly what
+        the constructor set them to (0/False, or restored from prior state),
+        and must not be clobbered back to 0/False here.
+        """
+        current = self._session.current_session_date
+        if prior_session_date is not None and current != prior_session_date:
+            self.trades_taken = 0
+            self.is_halted = False
+
     async def run(self) -> None:
         await self._state.init_schema()
         for executor in self._router.enabled:
@@ -269,14 +293,18 @@ class Engine:
                 # or position side effect of its own. Any flatten signal it
                 # returns here is for a bar already reflected in the state
                 # already restored, so it is discarded rather than handled.
+                prior_session_date = self._session.current_session_date
                 await self._session.on_bar(bar, self._tracker.position)
+                self._reset_after_rollover(prior_session_date)
                 processed += 1
                 if self._max_bars is not None and processed >= self._max_bars:
                     break
                 continue
 
             closed = self._tracker.on_bar(bar)
+            prior_session_date = self._session.current_session_date
             flatten_signal = await self._session.on_bar(bar, self._tracker.position)
+            self._reset_after_rollover(prior_session_date)
             session_date = self._session.current_session_date
             assert session_date is not None
 
@@ -350,12 +378,14 @@ async def run_from_config(
     resume_from: datetime | None = None
     resume_position: Position | None = None
     trades_taken = 0
+    is_halted = False
     resumed_session_date: date | None = None
     if prior is not None:
         strategy.restore_state(prior.strategy_state)
         resume_from = prior.last_bar_time
         resume_position = prior.position
         trades_taken = prior.trades_taken
+        is_halted = prior.is_halted
         resumed_session_date = prior.session_date
 
     clock = SimClock(first_tick)
@@ -393,6 +423,7 @@ async def run_from_config(
         backfill_until=backfill_until,
         resume_position=resume_position,
         trades_taken=trades_taken,
+        is_halted=is_halted,
         resumed_session_date=resumed_session_date,
         max_bars=max_bars,
     )

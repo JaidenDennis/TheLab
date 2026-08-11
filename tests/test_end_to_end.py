@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -225,6 +225,17 @@ def settings_for(tmp_path: Path) -> Path:
 
 def journal_events(tmp_path: Path) -> list[dict[str, object]]:
     path = tmp_path / "journal" / "2026-07-15.jsonl"
+    return [json.loads(line) for line in path.read_text().strip().splitlines()]
+
+
+def journal_events_for(tmp_path: Path, session_date: date) -> list[dict[str, object]]:
+    """Like journal_events, but for an arbitrary session date -- journal_events
+    is hardcoded to SESSION (2026-07-15) and a multi-day fixture needs more
+    than one day's file.
+    """
+    path = tmp_path / "journal" / f"{session_date.isoformat()}.jsonl"
+    if not path.exists():
+        return []
     return [json.loads(line) for line in path.read_text().strip().splitlines()]
 
 
@@ -850,4 +861,124 @@ async def test_a_restored_position_is_not_closed_by_bars_predating_its_own_entry
 
     closes = [e for e in journal_events(tmp_path) if e["event"] == "position_closed"]
     assert not closes, "no bar in this fixture should ever close the position"
+
+
+
+# --- Required addition: I1 -- trades_taken and is_halted must reset on a
+# session rollover. SessionManager owns the day boundary; these counters
+# live on Engine, and nothing connected the two before this fix.
+
+
+def two_session_fixture(
+    tmp_path: Path, bars_per_day: int, max_trades_per_day: int = 2
+) -> tuple[Path, Path]:
+    """Two consecutive trading days (2026-07-15, 2026-07-16), each with
+    `bars_per_day` clean 1m bars starting at 09:30 America/New_York, all
+    within a single continuous run (no crash, no resume_from).
+    """
+    ticks_path = tmp_path / "ticks.jsonl"
+    lines: list[str] = []
+    for day in (date(2026, 7, 15), date(2026, 7, 16)):
+        session_open = datetime.combine(day, time(13, 30), tzinfo=timezone.utc)
+        for minute in range(bars_per_day + 1):  # +1 tick to close the final bar
+            ts = session_open + timedelta(minutes=minute)
+            lines.append(json.dumps({"ts": ts.isoformat(), "price": "100.00", "size": 1}))
+    ticks_path.write_text("\n".join(lines) + "\n")
+
+    config = tmp_path / "test.yaml"
+    config.write_text(
+        f"data_dir: {tmp_path.as_posix()}\n"
+        "timeframes: [1m]\n"
+        "risk:\n"
+        f"  max_trades_per_day: {max_trades_per_day}\n"
+        "executors:\n"
+        "  - name: dryrun_broker\n"
+        "    type: dryrun\n"
+        "    enabled: true\n"
+        "    accounts: [tradeify, mff, fundednext]\n"
+        "  - name: dryrun_notify\n"
+        "    type: notify\n"
+        "    enabled: true\n"
+        "    accounts: []\n"
+    )
+    return config, ticks_path
+
+
+async def test_trades_taken_resets_on_a_session_rollover(tmp_path: Path) -> None:
+    """Pins I1's trades_taken half.
+
+    AlwaysStrategy re-arms every session -- on_session_start resets its
+    `_fired` flag -- so it attempts exactly one entry on day 1 and another on
+    day 2 of this single continuous two-day run. With max_trades_per_day=1,
+    day 2's attempt is only accepted if trades_taken reset to 0 at the
+    rollover; without the reset, day 1's single trade permanently pins the
+    counter at the daily cap and day 2 is vetoed MAX_TRADES -- measured
+    behaviour: "day 2 emitted zero trades, vetoed MAX_TRADES."
+    """
+    config, ticks = two_session_fixture(tmp_path, bars_per_day=3, max_trades_per_day=1)
+
+    await run_from_config(config, ticks, "always", None, strategy_override=AlwaysStrategy())
+
+    def entries(day: date) -> list[dict[str, object]]:
+        return [
+            e
+            for e in journal_events_for(tmp_path, day)
+            if e["event"] == "signal_emitted" and e["intent"] == SignalIntent.ENTRY.value
+        ]
+
+    day1_entries = entries(date(2026, 7, 15))
+    day2_entries = entries(date(2026, 7, 16))
+    day2_vetoes = [
+        e for e in journal_events_for(tmp_path, date(2026, 7, 16)) if e["event"] == "risk_veto"
+    ]
+
+    assert len(day1_entries) == 1, "precondition: day 1 must actually take its one trade"
+    assert not day2_vetoes, f"day 2 must not veto on a stale trade count: {day2_vetoes}"
+    assert len(day2_entries) == 1, (
+        "day 2's entry must not be blocked by day 1's trade count -- "
+        "max_trades_per_day is a daily limit, not a per-process one"
+    )
+
+
+async def test_is_halted_resets_on_a_session_rollover(tmp_path: Path) -> None:
+    """Pins I1's is_halted half.
+
+    ExplodingStrategy raises once, on its third on_bar call ever (a running
+    count, not a per-session one), which lands on day 1's third and final
+    bar here. Without a reset, is_halted stays True for the rest of the
+    process -- day 2 never gets another on_bar call, even though the
+    strategy would run cleanly from here on -- measured behaviour: "a
+    strategy that raised on Monday stays halted forever."
+    """
+    config, ticks = two_session_fixture(tmp_path, bars_per_day=3)
+
+    engine = await run_from_config(
+        config, ticks, "stub", None, strategy_override=ExplodingStrategy()
+    )
+
+    day1_errors = [
+        e
+        for e in journal_events_for(tmp_path, date(2026, 7, 15))
+        if e["event"] == "strategy_error"
+    ]
+    assert day1_errors, "precondition: the strategy must actually raise on day 1"
+    assert engine.is_halted is False, "a halt from a prior session must not persist into a new one"
+
+
+async def test_is_halted_is_restored_on_resume(tmp_path: Path) -> None:
+    """The other half of the is_halted finding: run_from_config previously
+    never read prior.is_halted back, and Engine.__init__ hardcoded False, so
+    a halted strategy silently came back up un-halted after every restart --
+    the crash the halt exists to protect against would just recur.
+    """
+    config = settings_for(tmp_path)
+    first = await run_from_config(
+        settings_for(tmp_path), FIXTURE, "stub", max_bars=5, strategy_override=ExplodingStrategy()
+    )
+    assert first.is_halted is True, "precondition: the strategy must actually raise"
+
+    second = await run_from_config(
+        config, FIXTURE, "stub", max_bars=6, strategy_override=ExplodingStrategy()
+    )
+    assert second.is_halted is True, "is_halted must be restored from the persisted state"
 
