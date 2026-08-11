@@ -17,6 +17,10 @@ class Context:
     """
 
     def __init__(self, clock: Clock, calendar: SessionCalendar, history_bars: int) -> None:
+        if history_bars < 1:
+            # deque(maxlen=0) silently discards every bar, so a strategy would
+            # see an empty history with no error anywhere near the cause.
+            raise ValueError(f"history_bars must be at least 1, got {history_bars}")
         self._clock = clock
         self._calendar = calendar
         self._history_bars = history_bars

@@ -1,6 +1,8 @@
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
+import pytest
+
 from nq_agent.clock import SessionCalendar, SimClock
 from nq_agent.context import Context
 from nq_agent.models import Bar, Direction, Position, SignalIntent
@@ -169,3 +171,27 @@ def test_context_bars_returns_a_snapshot_the_engine_cannot_mutate() -> None:
 
     assert len(held) == 1
     assert held[0].close == Decimal("20100")
+
+
+def test_context_rejects_a_history_size_that_would_discard_every_bar() -> None:
+    with pytest.raises(ValueError, match="history_bars must be at least 1"):
+        Context(SimClock(OPEN), calendar(), 0)
+
+
+def test_restoring_state_before_session_start_is_the_documented_wrong_order() -> None:
+    """on_session_start clears what restore_state sets, so order matters on resume."""
+    strategy = AlwaysStrategy()
+    ctx = context()
+    strategy.on_session_start(date(2026, 7, 15))
+    assert strategy.on_bar(bar(0), ctx) is not None
+    saved = strategy.get_state()
+
+    correct = AlwaysStrategy()
+    correct.on_session_start(date(2026, 7, 15))
+    correct.restore_state(saved)
+    assert correct.on_bar(bar(1), ctx) is None
+
+    wrong = AlwaysStrategy()
+    wrong.restore_state(saved)
+    wrong.on_session_start(date(2026, 7, 15))
+    assert wrong.on_bar(bar(1), ctx) is not None

@@ -26,7 +26,11 @@ class Strategy(ABC):
 
     @abstractmethod
     def on_session_start(self, session_date: date) -> None:
-        """Reset per-session state."""
+        """Reset per-session state.
+
+        Implementations may clear everything `restore_state` would set, so on a
+        resume this must run before `restore_state`, not after.
+        """
 
     @abstractmethod
     def on_session_end(self, session_date: date) -> None:
@@ -38,4 +42,10 @@ class Strategy(ABC):
 
     @abstractmethod
     def restore_state(self, state: dict[str, Any]) -> None:
-        """Rebuild internal state from get_state output."""
+        """Rebuild internal state from get_state output.
+
+        Ordering matters when resuming a crashed session. `on_session_start` may
+        unconditionally clear the very state this restores, so a caller resuming
+        persisted state must call `restore_state` *after* `on_session_start` for
+        that session. Restoring first silently discards the state.
+        """

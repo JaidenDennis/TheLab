@@ -47,6 +47,7 @@ class AlwaysStrategy(Strategy):
         )
 
     def on_session_start(self, session_date: date) -> None:
+        # Clears what restore_state sets. On a resume, call this first.
         self._fired = False
 
     def on_session_end(self, session_date: date) -> None:
