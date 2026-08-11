@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -183,11 +183,38 @@ def test_session_state_rejects_naive_last_bar_time() -> None:
 
 
 def test_session_state_normalises_aware_last_bar_time_to_utc() -> None:
+    eastern_daylight = timezone(timedelta(hours=-4))
     state = SessionState(
         session_date=date(2026, 7, 15),
-        last_bar_time=datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc),
+        last_bar_time=datetime(2026, 7, 15, 11, 0, tzinfo=eastern_daylight),
     )
     assert state.last_bar_time == datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc)
+    assert state.last_bar_time.utcoffset() == timedelta(0)
+
+
+def test_every_datetime_field_converts_a_non_utc_offset() -> None:
+    """Guards the .astimezone() call itself, which a UTC-in test cannot reach."""
+    eastern_daylight = timezone(timedelta(hours=-4))
+    local = datetime(2026, 7, 15, 9, 30, tzinfo=eastern_daylight)
+    expected = datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc)
+
+    assert Tick(symbol="NQ", ts=local, price=Decimal("1"), size=1).ts == expected
+    assert _bar(open_time=local).open_time == expected
+    assert _entry(timestamp=local).timestamp == expected
+
+    position = Position(
+        symbol="NQ",
+        direction=Direction.LONG,
+        quantity=1,
+        entry_price=Decimal("20100"),
+        entry_time=local,
+        stop_price=Decimal("20090"),
+        target_price=Decimal("20120"),
+    )
+    assert position.entry_time == expected
+    assert PositionClose(
+        position=position, exit_price=Decimal("1"), exit_time=local, exit_reason="STOP"
+    ).exit_time == expected
 
 
 def test_session_state_defaults_are_empty() -> None:

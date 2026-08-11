@@ -60,7 +60,6 @@ class Tick(Frozen):
     size: int
 
 
-
 class Bar(Frozen):
     symbol: str
     timeframe: str
@@ -71,7 +70,6 @@ class Bar(Frozen):
     close: Decimal
     volume: int
     closed: bool = True
-
 
     @field_validator("timeframe")
     @classmethod
@@ -97,7 +95,6 @@ class Signal(Frozen):
     quantity: int = Field(ge=1)
     reason: str
     metadata: dict[str, Any] = Field(default_factory=dict)
-
 
     @model_validator(mode="after")
     def _check_intent_prices(self) -> Signal:
@@ -139,13 +136,11 @@ class Position(Frozen):
     target_price: Decimal
 
 
-
 class PositionClose(Frozen):
     position: Position
     exit_price: Decimal
     exit_time: UtcDatetime
     exit_reason: str
-
 
 
 class SessionState(Frozen):
