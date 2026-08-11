@@ -205,6 +205,67 @@ class DelayedEntryStrategy(Strategy):
         self._fired = bool(state.get("fired", False))
 
 
+class LongThenShortStrategy(Strategy):
+    """Enters LONG on the first 1m bar, SHORT on the second, then never again.
+
+    Exists for I2: PositionTracker.on_signal silently refuses the SHORT
+    (a position is already open), but nothing about risk or the router knows
+    that -- both signals clear risk and both dispatch. Measured behaviour:
+    "two position_opened records, two broker dispatches, trades_taken=2, and
+    one actual tracked position." Wide, mismatched offsets on both sides so
+    neither position's stop or target is at risk of being touched by the
+    fixture's own price action before the test's assertions run.
+    """
+
+    name = "long_then_short"
+    required_timeframes = ["1m"]
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    def on_bar(self, bar: Bar, context: Context) -> Signal | None:
+        if bar.timeframe != "1m":
+            return None
+        self._calls += 1
+        if self._calls == 1:
+            return Signal(
+                timestamp=bar.close_time,
+                symbol=bar.symbol,
+                intent=SignalIntent.ENTRY,
+                direction=Direction.LONG,
+                entry_price=bar.close,
+                stop_price=bar.close - Decimal("5000"),
+                target_price=bar.close + Decimal("5000"),
+                quantity=1,
+                reason="long then short: first bar",
+            )
+        if self._calls == 2:
+            return Signal(
+                timestamp=bar.close_time,
+                symbol=bar.symbol,
+                intent=SignalIntent.ENTRY,
+                direction=Direction.SHORT,
+                entry_price=bar.close,
+                stop_price=bar.close + Decimal("5000"),
+                target_price=bar.close - Decimal("5000"),
+                quantity=1,
+                reason="long then short: second bar",
+            )
+        return None
+
+    def on_session_start(self, session_date: date) -> None:
+        return None
+
+    def on_session_end(self, session_date: date) -> None:
+        return None
+
+    def get_state(self) -> dict[str, Any]:
+        return {"calls": self._calls}
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        self._calls = int(state.get("calls", 0))
+
+
 def settings_for(tmp_path: Path) -> Path:
     """Write a paper config whose data_dir points at tmp_path."""
     config = tmp_path / "test.yaml"
@@ -982,3 +1043,47 @@ async def test_is_halted_is_restored_on_resume(tmp_path: Path) -> None:
     )
     assert second.is_halted is True, "is_halted must be restored from the persisted state"
 
+# --- Required addition: I2 -- the tracker's refusal must be observable.
+
+
+async def test_a_refused_second_entry_is_journaled_and_not_counted_as_a_trade(
+    tmp_path: Path,
+) -> None:
+    """Pins I2.
+
+    LONG then SHORT, one bar apart: both clear risk and both dispatch (the
+    router and risk layer have no notion of a locally tracked position), but
+    PositionTracker.on_signal silently refused the SHORT before this fix --
+    trades_taken still counted it, and the journal recorded a second
+    position_opened that never actually happened locally. Measured
+    behaviour: "two position_opened records, two broker dispatches,
+    trades_taken=2, and one actual tracked position ... The broker received
+    a reversal." max_bars=5 keeps the run well clear of the session cutoff,
+    so the only signals in play are the two entries -- no cutoff flatten to
+    add its own order_result records to the count.
+    """
+    config = settings_for(tmp_path)
+    engine = await run_from_config(
+        config, FIXTURE, "always", max_bars=5, strategy_override=LongThenShortStrategy()
+    )
+
+    events = journal_events(tmp_path)
+    opened = [e for e in events if e["event"] == "position_opened"]
+    rejected = [e for e in events if e["event"] == "position_open_rejected"]
+    results = [e for e in events if e["event"] == "order_result"]
+
+    assert len(opened) == 1, "only the first entry actually opens a local position"
+    assert len(rejected) == 1, "the second entry's refusal must be journaled, not swallowed"
+    assert rejected[0]["reason"] == "position already open"
+    assert len(results) == 8, "both signals reach the router regardless of the local refusal"
+    assert engine.trades_taken == 1, "a refused entry must not be counted as a trade"
+
+    store = StateStore(load_settings(config).state_db_path)
+    await store.init_schema()
+    state = await store.load(SESSION)
+    assert state is not None
+    assert state.trades_taken == 1
+    assert state.position is not None
+    assert state.position.direction is Direction.LONG, (
+        "the tracked position must still be the first entry, not silently replaced"
+    )

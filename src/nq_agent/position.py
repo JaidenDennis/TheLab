@@ -24,9 +24,18 @@ class PositionTracker:
     def restore(self, position: Position | None) -> None:
         self._position = position
 
-    def on_signal(self, signal: Signal) -> None:
+    def on_signal(self, signal: Signal) -> Position | None:
+        """Open a position from an ENTRY signal, or refuse.
+
+        Returns the opened Position, or None if the signal was refused --
+        wrong intent, or a position is already open. None is a real outcome
+        the caller must observe, not swallow: a second ENTRY while one is
+        already open is not a no-op anywhere else in the system (risk still
+        clears it, the router still dispatches it to the broker), so the
+        caller needs to know its own local bookkeeping did not follow suit.
+        """
         if signal.intent is not SignalIntent.ENTRY or self._position is not None:
-            return
+            return None
         assert signal.entry_price is not None
         assert signal.stop_price is not None
         assert signal.target_price is not None
@@ -39,6 +48,7 @@ class PositionTracker:
             stop_price=signal.stop_price,
             target_price=signal.target_price,
         )
+        return self._position
 
     def on_bar(self, bar: Bar) -> PositionClose | None:
         position = self._position

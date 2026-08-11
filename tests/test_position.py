@@ -143,6 +143,30 @@ def test_a_second_entry_while_open_is_ignored() -> None:
     assert tracker.position == first
 
 
+# --- Required addition: I2 -- on_signal's refusal must be observable, not a
+# silent no-op. It returned None unconditionally before this fix too, so
+# these pin the *meaning* of that None: the caller (Engine) tells an opened
+# position apart from a refused one by the return value alone.
+
+
+def test_on_signal_returns_the_opened_position() -> None:
+    tracker = PositionTracker()
+    opened = tracker.on_signal(long_entry())
+    assert opened is not None
+    assert opened == tracker.position
+
+
+def test_on_signal_returns_none_when_a_position_is_already_open() -> None:
+    tracker = PositionTracker()
+    tracker.on_signal(long_entry())
+    refused = tracker.on_signal(short_entry())
+    assert refused is None
+    assert tracker.position is not None
+    assert tracker.position.direction is Direction.LONG, (
+        "the refused signal must not have touched the existing position"
+    )
+
+
 def test_restore_reinstates_a_position() -> None:
     tracker = PositionTracker()
     position = Position(

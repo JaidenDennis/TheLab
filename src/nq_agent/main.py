@@ -194,14 +194,29 @@ class Engine:
         self._risk.record_accepted(signal)
 
         if signal.intent is SignalIntent.ENTRY:
-            self._tracker.on_signal(signal)
-            self.trades_taken += 1
-            await self._journal.write(
-                "position_opened",
-                session_date,
-                signal_id=signal.id,
-                entry_price=signal.entry_price,
-            )
+            opened = self._tracker.on_signal(signal)
+            if opened is None:
+                # The tracker refused -- a position is already open. Risk
+                # already cleared this signal and the router already
+                # dispatched it to the broker above: the broker received a
+                # second entry (a reversal, from its point of view) that our
+                # own local bookkeeping did not follow. That disagreement
+                # must be observable, not silently absorbed by skipping the
+                # trades_taken increment with no record of why.
+                await self._journal.write(
+                    "position_open_rejected",
+                    session_date,
+                    signal_id=signal.id,
+                    reason="position already open",
+                )
+            else:
+                self.trades_taken += 1
+                await self._journal.write(
+                    "position_opened",
+                    session_date,
+                    signal_id=signal.id,
+                    entry_price=signal.entry_price,
+                )
         else:
             closed = self._tracker.flatten(bar.close, bar.close_time)
             if closed is not None:
