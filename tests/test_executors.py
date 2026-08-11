@@ -58,3 +58,30 @@ async def test_dry_run_notifier_has_no_account_and_records_alerts() -> None:
 async def test_health_check_passes_for_dry_run_components() -> None:
     assert await DryRunExecutor("dryrun", account_id="tradeify").health_check() is True
     assert await DryRunNotifier("notify").health_check() is True
+
+
+async def test_empty_account_id_is_still_suffixed_into_the_name() -> None:
+    """Truthiness would drop the suffix while account_id still stored ""."""
+    executor = DryRunExecutor("dryrun", account_id="")
+    assert executor.name == "dryrun:"
+    assert executor.account_id == ""
+
+
+async def test_flatten_signal_carries_no_price_keys() -> None:
+    signal = Signal(
+        timestamp=datetime(2026, 7, 15, 20, 30, tzinfo=timezone.utc),
+        symbol="NQ",
+        intent=SignalIntent.FLATTEN,
+        direction=Direction.LONG,
+        quantity=2,
+        reason="session cutoff",
+    )
+    result = await DryRunExecutor("dryrun", account_id="tradeify").execute(signal)
+
+    assert result.success is True
+    assert result.raw_response["intent"] == "FLATTEN"
+    assert result.raw_response["direction"] == "LONG"
+    assert result.raw_response["quantity"] == "2"
+    assert "entry_price" not in result.raw_response
+    assert "stop_price" not in result.raw_response
+    assert "target_price" not in result.raw_response
