@@ -173,3 +173,39 @@ def test_long_run_never_violates_close_time_ordering() -> None:
     assert keys == sorted(keys)
     assert {bar.timeframe for bar in all_bars} == {"1m", "5m", "15m"}
     assert len(all_bars) > 10
+
+
+def test_duplicate_timeframes_are_rejected() -> None:
+    """A repeated timeframe would share one bucket and double its volume."""
+    with pytest.raises(ValueError, match=r"duplicate timeframes: \['1m'\]"):
+        BarAggregator("NQ", ["1m", "5m", "1m"])
+
+
+def test_ordered_puts_the_shorter_timeframe_first() -> None:
+    """White-box: no public-API test can falsify the duration tie-break.
+
+    add_tick and flush both build their list by iterating self._timeframes,
+    which is sorted ascending at construction, so the input to _ordered is
+    already tie-break-ordered. Dropping the tie-break from the sort key leaves
+    every public test green. This one passes deliberately shuffled input.
+    """
+    agg = BarAggregator("NQ", ["1m", "5m"])
+    close_time = START + timedelta(minutes=5)
+
+    def bar(timeframe: str, minutes: int) -> Bar:
+        return Bar(
+            symbol="NQ",
+            timeframe=timeframe,
+            open_time=close_time - timedelta(minutes=minutes),
+            open=Decimal("20100"),
+            high=Decimal("20100"),
+            low=Decimal("20100"),
+            close=Decimal("20100"),
+            volume=1,
+        )
+
+    five, one = bar("5m", 5), bar("1m", 1)
+    assert five.close_time == one.close_time
+
+    assert [b.timeframe for b in agg._ordered([five, one])] == ["1m", "5m"]
+    assert [b.timeframe for b in agg._ordered([one, five])] == ["1m", "5m"]

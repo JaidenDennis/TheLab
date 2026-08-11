@@ -38,6 +38,13 @@ class BarAggregator:
     """
 
     def __init__(self, symbol: str, timeframes: list[str]) -> None:
+        duplicates = sorted({tf for tf in timeframes if timeframes.count(tf) > 1})
+        if duplicates:
+            # self._builders is keyed by timeframe, so a repeat would share one
+            # bucket and take tick.size twice: silently doubled volume, correct
+            # OHLC, no error. Reject it rather than dedupe, so a config typo is
+            # visible instead of quietly tolerated.
+            raise ValueError(f"duplicate timeframes: {duplicates}")
         for timeframe in timeframes:
             if timeframe not in TIMEFRAME_SECONDS:
                 raise ValueError(f"unsupported timeframe: {timeframe}")
@@ -60,6 +67,14 @@ class BarAggregator:
         )
 
     def _ordered(self, bars: list[Bar]) -> list[Bar]:
+        """Sort by close time, shorter timeframe first on a tie.
+
+        The duration tie-break is load-bearing even though callers happen to
+        build `bars` in ascending-duration order already: a 5m reaching the
+        strategy before the 1m closing on its own boundary is a lookahead bug.
+        Tested directly in test_ordered_puts_the_shorter_timeframe_first, which
+        passes pre-shuffled input, because no public-API test can falsify it.
+        """
         return sorted(bars, key=lambda b: (b.close_time, TIMEFRAME_SECONDS[b.timeframe]))
 
     def add_tick(self, tick: Tick) -> list[Bar]:
