@@ -6,6 +6,10 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "pyyaml>=6.0",
+    # zoneinfo has no system IANA database on Windows, and minimal Linux
+    # containers often ship without one either. SessionCalendar cannot
+    # resolve America/New_York without it.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +30,7 @@ packages = ["src/nq_agent"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 
 [tool.ruff]

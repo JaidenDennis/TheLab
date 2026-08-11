@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -31,6 +31,23 @@ def test_sim_clock_refuses_to_go_backwards() -> None:
     clock = SimClock(datetime(2026, 7, 15, 13, 31, tzinfo=timezone.utc))
     with pytest.raises(ValueError, match="backwards"):
         clock.advance_to(datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc))
+
+
+def test_sim_clock_rejects_naive_start() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        SimClock(datetime(2026, 7, 15, 13, 30))
+
+
+def test_sim_clock_rejects_naive_advance() -> None:
+    clock = SimClock(datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc))
+    with pytest.raises(ValueError, match="timezone-aware"):
+        clock.advance_to(datetime(2026, 7, 15, 13, 31))
+
+
+def test_sim_clock_normalises_a_non_utc_start() -> None:
+    eastern_daylight = timezone(timedelta(hours=-4))
+    clock = SimClock(datetime(2026, 7, 15, 9, 30, tzinfo=eastern_daylight))
+    assert clock.now() == datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc)
 
 
 def test_session_date_uses_new_york_calendar_date() -> None:
