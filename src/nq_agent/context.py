@@ -26,6 +26,9 @@ class Context:
         self._warmup = False
 
     def bars(self, timeframe: str, count: int) -> Sequence[Bar]:
+        if count <= 0:
+            # list[-0:] is list[0:], i.e. the whole history. Guard it explicitly.
+            return []
         history = self._bars.get(timeframe)
         if history is None:
             return []

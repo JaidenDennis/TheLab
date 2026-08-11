@@ -141,3 +141,31 @@ def test_always_strategy_state_round_trips() -> None:
     restored.on_session_start(date(2026, 7, 15))
     restored.restore_state(saved)
     assert restored.on_bar(bar(1), ctx) is None
+
+
+def test_context_bars_with_zero_or_negative_count_is_empty() -> None:
+    """list[-0:] is the whole list, so count=0 must be guarded explicitly."""
+    ctx = context()
+    for minute in range(5):
+        ctx.record_bar(bar(minute))
+
+    assert ctx.bars("1m", 0) == []
+    assert ctx.bars("1m", -1) == []
+    assert len(ctx.bars("1m", 5)) == 5
+
+
+def test_context_bars_for_an_unseen_timeframe_is_empty() -> None:
+    ctx = context()
+    ctx.record_bar(bar(0, timeframe="1m"))
+    assert ctx.bars("5m", 10) == []
+
+
+def test_context_bars_returns_a_snapshot_the_engine_cannot_mutate() -> None:
+    ctx = context()
+    ctx.record_bar(bar(0, close="20100"))
+    held = ctx.bars("1m", 10)
+
+    ctx.record_bar(bar(1, close="20200"))
+
+    assert len(held) == 1
+    assert held[0].close == Decimal("20100")
