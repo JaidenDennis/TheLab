@@ -12,6 +12,17 @@ class PositionTracker:
     When a single bar's range touches both the stop and the target, the stop
     wins. Bar data cannot tell us which came first, so the tracker takes the
     pessimistic reading rather than guessing.
+
+    Every modelling choice here breaks the same way on purpose -- against the
+    position:
+
+    - both levels touched in one bar: stop wins
+    - a bar opening through the stop: fills at the open, not the stop
+    - a bar opening through the target: still fills at the target
+
+    Read P&L off this and it is a floor, not a forecast. What it still does
+    not model is commission, exchange fees, and the spread crossed on entry;
+    a backtest built on it is gross of all three.
     """
 
     def __init__(self) -> None:
@@ -58,12 +69,24 @@ class PositionTracker:
         if position.direction is Direction.LONG:
             stop_hit = bar.low <= position.stop_price
             target_hit = bar.high >= position.target_price
+            # A bar that OPENS through the stop never traded at the stop
+            # price: the market gapped past it while we were not looking, and
+            # the first price actually available is the open. Filling at the
+            # stop books a loss that was not on offer -- the one optimistic
+            # assumption the "stop wins" pessimism did not cover, and the one
+            # that flatters a backtest exactly where real slippage is worst.
+            gapped = bar.open < position.stop_price
         else:
             stop_hit = bar.high >= position.stop_price
             target_hit = bar.low <= position.target_price
+            gapped = bar.open > position.stop_price
 
         if stop_hit:
-            return self._close(position, position.stop_price, bar.close_time, "STOP")
+            # Deliberately not symmetric with the target below: a gapped-through
+            # target still fills at the target, because understating a win is
+            # the safe direction to be wrong in. Overstating one is not.
+            fill = bar.open if gapped else position.stop_price
+            return self._close(position, fill, bar.close_time, "STOP")
         if target_hit:
             return self._close(position, position.target_price, bar.close_time, "TARGET")
         return None

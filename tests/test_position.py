@@ -85,7 +85,11 @@ def test_long_stop_touch_closes_at_the_stop() -> None:
     tracker = PositionTracker()
     tracker.on_signal(long_entry())
 
-    closed = tracker.on_bar(bar(2, high="20105", low="20085", close="20088"))
+    # Explicit open, above the stop: bar()'s open == close would put this
+    # bar's open at 20088, i.e. already through the 20090 stop, which is a
+    # gap and fills at the open instead. This test is about the ordinary
+    # intrabar touch, so it has to say where the bar opened.
+    closed = tracker.on_bar(gap_bar(2, open_="20098", high="20105", low="20085", close="20088"))
     assert closed is not None
     assert closed.exit_reason == "STOP"
     assert closed.exit_price == Decimal("20090")
@@ -110,7 +114,9 @@ def test_short_stop_and_target_are_mirrored() -> None:
 
     tracker = PositionTracker()
     tracker.on_signal(short_entry())
-    closed = tracker.on_bar(bar(2, high="20115", low="20095", close="20112"))
+    # Opens below the 20110 stop, so the stop is reached on the way up rather
+    # than gapped through -- see the note in the long case above.
+    closed = tracker.on_bar(gap_bar(2, open_="20098", high="20115", low="20095", close="20112"))
     assert closed is not None
     assert closed.exit_reason == "STOP"
     assert closed.exit_price == Decimal("20110")
@@ -254,3 +260,80 @@ def test_restore_then_exit_preserves_the_restored_entry_details() -> None:
     assert closed is not None
     assert closed.exit_reason == "STOP"
     assert closed.position == position
+
+
+def gap_bar(minute: int, open_: str, high: str, low: str, close: str) -> Bar:
+    """A bar whose open is not its close -- the shape a gap actually has."""
+    return Bar(
+        symbol="NQ",
+        timeframe="1m",
+        open_time=OPEN + timedelta(minutes=minute),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=10,
+    )
+
+
+def test_a_long_gapping_through_its_stop_fills_at_the_open_not_the_stop() -> None:
+    """The stop was 20090, but the market reopened at 20050 and never traded
+    at 20090 again. Filling at 20090 books a loss that was not available: the
+    first price at which the position could actually be exited is the open."""
+    tracker = PositionTracker()
+    tracker.on_signal(long_entry())
+
+    closed = tracker.on_bar(gap_bar(2, open_="20050", high="20060", low="20040", close="20055"))
+
+    assert closed is not None
+    assert closed.exit_reason == "STOP"
+    assert closed.exit_price == Decimal("20050")
+
+
+def test_a_short_gapping_through_its_stop_fills_at_the_open_not_the_stop() -> None:
+    tracker = PositionTracker()
+    tracker.on_signal(short_entry())
+
+    closed = tracker.on_bar(gap_bar(2, open_="20160", high="20170", low="20150", close="20165"))
+
+    assert closed is not None
+    assert closed.exit_reason == "STOP"
+    assert closed.exit_price == Decimal("20160")
+
+
+def test_a_stop_reached_within_the_bar_still_fills_at_the_stop() -> None:
+    """The ordinary case must not regress: the bar opened above the stop, so
+    the stop price was genuinely available on the way down."""
+    tracker = PositionTracker()
+    tracker.on_signal(long_entry())
+
+    closed = tracker.on_bar(gap_bar(2, open_="20098", high="20099", low="20085", close="20088"))
+
+    assert closed is not None
+    assert closed.exit_price == Decimal("20090")
+
+
+def test_a_long_opening_exactly_at_its_stop_fills_at_the_stop() -> None:
+    """Boundary: opening AT the stop is not a gap through it."""
+    tracker = PositionTracker()
+    tracker.on_signal(long_entry())
+
+    closed = tracker.on_bar(gap_bar(2, open_="20090", high="20095", low="20085", close="20092"))
+
+    assert closed is not None
+    assert closed.exit_price == Decimal("20090")
+
+
+def test_a_target_gapped_through_still_fills_at_the_target() -> None:
+    """Deliberately NOT symmetric with the stop. Filling a gapped-through
+    target at the target understates the win, and understating a win is the
+    safe direction to be wrong in -- the same reason stop wins on an
+    ambiguous bar."""
+    tracker = PositionTracker()
+    tracker.on_signal(long_entry())
+
+    closed = tracker.on_bar(gap_bar(2, open_="20140", high="20150", low="20135", close="20145"))
+
+    assert closed is not None
+    assert closed.exit_reason == "TARGET"
+    assert closed.exit_price == Decimal("20120")
