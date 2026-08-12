@@ -36,6 +36,7 @@ from nq_agent.state import StateStore
 from nq_agent.strategy.always import AlwaysStrategy
 from nq_agent.strategy.base import Strategy
 from nq_agent.strategy.orb import OpeningRangeBreakout
+from nq_agent.strategy.sme import SessionMomentumExpansion
 from nq_agent.strategy.stub import StubStrategy
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ STRATEGIES: dict[str, type[Strategy]] = {
     # A reference implementation, not a validated edge -- see orb.py's module
     # docstring before pointing this at an account.
     "orb": OpeningRangeBreakout,
+    # Session-Momentum Expansion v1. Implemented to spec with documented
+    # deviations (see sme.py's module docstring); NOT yet validated -- the
+    # walk-forward protocol in the spec gates any live use.
+    "sme": SessionMomentumExpansion,
 }
 
 
