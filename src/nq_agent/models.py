@@ -26,6 +26,23 @@ class SignalIntent(str, Enum):
     FLATTEN = "FLATTEN"
 
 
+class OrderOutcome(str, Enum):
+    """What is actually known about an order after dispatch.
+
+    A boolean cannot carry this. `success=False` asserts the order did not
+    fill, but a timeout, a connection reset mid-POST, or a cancellation
+    between sending and reading the response all leave that genuinely open --
+    and the recovery for "rejected" (retry, or route elsewhere) is the
+    opposite of the recovery for "unknown" (reconcile against the broker
+    before doing anything at all). Collapsing the two is how an agent ends up
+    holding a position it believes it does not have.
+    """
+
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    UNKNOWN = "UNKNOWN"
+
+
 class VetoReason(str, Enum):
     MAX_TRADES = "MAX_TRADES"
     PAST_CUTOFF = "PAST_CUTOFF"
@@ -33,6 +50,8 @@ class VetoReason(str, Enum):
     ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
     DUPLICATE_SIGNAL = "DUPLICATE_SIGNAL"
     SESSION_CLOSED = "SESSION_CLOSED"
+    DAILY_LOSS_LIMIT = "DAILY_LOSS_LIMIT"
+    TRAILING_DRAWDOWN = "TRAILING_DRAWDOWN"
 
 
 def require_utc(value: datetime) -> datetime:
@@ -119,11 +138,28 @@ class Signal(Frozen):
 class OrderResult(Frozen):
     signal_id: str
     executor_name: str
-    success: bool
+    # Required, with no default: every executor has to state what it actually
+    # knows. A default would let a new one inherit an assumption.
+    outcome: OrderOutcome
     account_id: str | None = None
     latency_ms: int = 0
     error: str | None = None
     raw_response: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def success(self) -> bool:
+        """Confirmed filled. UNKNOWN is deliberately not success -- nothing
+        should treat "maybe" as a fill."""
+        return self.outcome is OrderOutcome.FILLED
+
+    @property
+    def needs_reconciliation(self) -> bool:
+        """The agent's belief about this order may not match the broker's.
+
+        The only honest response is to ask the broker what it holds before
+        sending anything else for this symbol.
+        """
+        return self.outcome is OrderOutcome.UNKNOWN
 
 
 class Position(Frozen):
@@ -150,6 +186,10 @@ class SessionState(Frozen):
     strategy_state: dict[str, Any] = Field(default_factory=dict)
     last_bar_time: UtcDatetime | None = None
     position: Position | None = None
+    # RiskManager.snapshot(). Persisted for the same reason trades_taken is:
+    # a restart that forgets the day's realised losses resumes trading
+    # straight through the limit that had just stopped it.
+    risk_state: dict[str, str] = Field(default_factory=dict)
 
 
 class RiskVeto(Frozen):

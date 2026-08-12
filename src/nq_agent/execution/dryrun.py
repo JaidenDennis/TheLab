@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from nq_agent.execution.base import Executor, NotifyExecutor
-from nq_agent.models import OrderResult, Signal
+from nq_agent.models import OrderOutcome, OrderResult, Signal
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def _dry_run_result(
     return OrderResult(
         signal_id=signal.id,
         executor_name=name,
-        success=True,
+        outcome=OrderOutcome.FILLED,
         account_id=account_id,
         latency_ms=0,
         raw_response=payload,
@@ -54,6 +54,10 @@ class DryRunExecutor(Executor):
         self.account_id = account_id
         self.enabled = enabled
         self.sent: list[Signal] = []
+        # Recorded for the same reason `sent` is: this class is the inspectable
+        # stand-in for a real executor, and "was I released?" is exactly what a
+        # real one holding a network session needs answered.
+        self.closed = 0
 
     async def execute(self, signal: Signal) -> OrderResult:
         self.sent.append(signal)
@@ -61,6 +65,9 @@ class DryRunExecutor(Executor):
 
     async def health_check(self) -> bool:
         return True
+
+    async def close(self) -> None:
+        self.closed += 1
 
 
 class DryRunNotifier(NotifyExecutor):
@@ -72,6 +79,7 @@ class DryRunNotifier(NotifyExecutor):
         self.enabled = enabled
         self.sent: list[Signal] = []
         self.alerts: list[str] = []
+        self.closed = 0
 
     async def execute(self, signal: Signal) -> OrderResult:
         self.sent.append(signal)
@@ -83,3 +91,6 @@ class DryRunNotifier(NotifyExecutor):
 
     async def health_check(self) -> bool:
         return True
+
+    async def close(self) -> None:
+        self.closed += 1

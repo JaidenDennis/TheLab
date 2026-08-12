@@ -9,7 +9,7 @@ from nq_agent.clock import SimClock
 from nq_agent.execution.base import Executor
 from nq_agent.execution.dryrun import DryRunExecutor, DryRunNotifier
 from nq_agent.journal import Journal
-from nq_agent.models import Direction, OrderResult, Signal, SignalIntent
+from nq_agent.models import Direction, OrderOutcome, OrderResult, Signal, SignalIntent
 from nq_agent.router import Router
 
 SESSION = date(2026, 7, 15)
@@ -42,7 +42,7 @@ class SlowExecutor(Executor):
 
     async def execute(self, sig: Signal) -> OrderResult:
         await asyncio.sleep(self._delay)
-        return OrderResult(signal_id=sig.id, executor_name=self.name, success=True)
+        return OrderResult(signal_id=sig.id, executor_name=self.name, outcome=OrderOutcome.FILLED)
 
     async def health_check(self) -> bool:
         return True
@@ -283,7 +283,7 @@ class RendezvousExecutor(Executor):
         if RendezvousExecutor.arrived == self._expected:
             RendezvousExecutor.all_here.set()
         await asyncio.wait_for(RendezvousExecutor.all_here.wait(), timeout=2.0)
-        return OrderResult(signal_id=sig.id, executor_name=self.name, success=True)
+        return OrderResult(signal_id=sig.id, executor_name=self.name, outcome=OrderOutcome.FILLED)
 
     async def health_check(self) -> bool:
         return True
@@ -303,3 +303,90 @@ async def test_brokers_run_concurrently_not_sequentially(tmp_path: Path) -> None
         f"got {[(r.executor_name, r.error) for r in results]}"
     )
     assert RendezvousExecutor.arrived == 4
+
+
+class ClosableExecutor(Executor):
+    """Records that close() reached it. Stands in for a real executor holding
+    a network session it has to release."""
+
+    def __init__(self, name: str, *, enabled: bool = True) -> None:
+        self.name = name
+        self.account_id = name
+        self.enabled = enabled
+        self.closed = 0
+
+    async def execute(self, sig: Signal) -> OrderResult:
+        return OrderResult(signal_id=sig.id, executor_name=self.name, outcome=OrderOutcome.FILLED)
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
+class UncloseableExecutor(ClosableExecutor):
+    async def close(self) -> None:
+        await super().close()
+        raise RuntimeError("could not release the session")
+
+
+async def test_close_reaches_every_executor(tmp_path: Path) -> None:
+    a = ClosableExecutor("a")
+    b = ClosableExecutor("b")
+    router = Router([a, b], journal(tmp_path), 1.0, 1.0, "continue")
+
+    await router.close()
+
+    assert (a.closed, b.closed) == (1, 1)
+
+
+async def test_close_reaches_disabled_executors_too(tmp_path: Path) -> None:
+    """`enabled` gates dispatch, not resource ownership. A disabled executor
+    was still constructed, so whatever it holds still has to be released."""
+    disabled = ClosableExecutor("disabled", enabled=False)
+    router = Router([disabled], journal(tmp_path), 1.0, 1.0, "continue")
+
+    await router.close()
+
+    assert disabled.closed == 1
+
+
+async def test_one_executor_failing_to_close_does_not_strand_the_others(
+    tmp_path: Path,
+) -> None:
+    """Same rule as dispatch: one destination misbehaving never takes out a
+    sibling. A leaked session on one leg must not leak every other leg too."""
+    first = UncloseableExecutor("first")
+    second = ClosableExecutor("second")
+    router = Router([first, second], journal(tmp_path), 1.0, 1.0, "continue")
+
+    await router.close()
+
+    assert first.closed == 1
+    assert second.closed == 1
+
+
+class ForgetfulExecutor(Executor):
+    """A subclass that never sets account_id -- the mistake Executor's bare
+    class-level annotations do not prevent."""
+
+    def __init__(self) -> None:
+        self.name = "forgetful"
+        self.enabled = True
+
+    async def execute(self, sig: Signal) -> OrderResult:
+        return OrderResult(signal_id=sig.id, executor_name=self.name, outcome=OrderOutcome.FILLED)
+
+    async def health_check(self) -> bool:
+        return True
+
+
+async def test_an_executor_missing_a_required_attribute_is_rejected_at_construction(
+    tmp_path: Path,
+) -> None:
+    """Without this the failure is an AttributeError raised from inside
+    dispatch -- i.e. at the moment a signal is being sent, which is the worst
+    possible time to discover a wiring mistake."""
+    with pytest.raises(ValueError, match="account_id"):
+        Router([ForgetfulExecutor()], journal(tmp_path), 1.0, 1.0, "continue")

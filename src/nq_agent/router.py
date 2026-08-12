@@ -9,7 +9,7 @@ from datetime import date
 
 from nq_agent.execution.base import Executor, NotifyExecutor
 from nq_agent.journal import Journal
-from nq_agent.models import OrderResult, Signal
+from nq_agent.models import OrderOutcome, OrderResult, Signal
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,27 @@ class Router:
         partial_fan: str,
         enabled_accounts: Callable[[], set[str] | None] | None = None,
     ) -> None:
+        # Executor declares name/account_id/enabled as bare class-level
+        # annotations, which Python does not enforce -- a subclass whose
+        # __init__ forgets one is a perfectly valid class that raises
+        # AttributeError the first time the router touches the missing
+        # attribute. That first touch is inside dispatch, i.e. while a signal
+        # is being sent to a broker. Wiring is where this should fail, so it
+        # fails here, before anything can be dispatched at all. Checked before
+        # the duplicate-name scan below, which itself reads `.name`.
+        for executor in executors:
+            missing = [
+                attribute
+                for attribute in ("name", "account_id", "enabled")
+                if not hasattr(executor, attribute)
+            ]
+            if missing:
+                raise ValueError(
+                    f"{type(executor).__name__} does not set {', '.join(missing)}; "
+                    "Executor's class-level annotations are a contract its "
+                    "__init__ has to satisfy, not defaults it inherits"
+                )
+
         # Router hands out the whole instance list, and OrderResult.executor_name
         # is the only field identifying which destination produced a result.
         # DryRunExecutor(account_id=None) and DryRunNotifier(name) both reduce to
@@ -53,6 +74,12 @@ class Router:
         self._notify_timeout = notify_timeout
         self._partial_fan = partial_fan
         self._enabled_accounts = enabled_accounts
+
+    @property
+    def executors(self) -> list[Executor]:
+        """Every wired destination, enabled or not. `enabled` is the dispatch
+        list; this is the ownership list, which is what teardown needs."""
+        return list(self._executors)
 
     @property
     def enabled(self) -> list[Executor]:
@@ -84,22 +111,29 @@ class Router:
         try:
             result = await asyncio.wait_for(executor.execute(signal), timeout)
         except asyncio.TimeoutError:
+            # UNKNOWN, not REJECTED: the broker has not answered, which is not
+            # the same as answering no. It may be filling the order right now.
             elapsed = int((time.perf_counter() - started) * 1000)
             return OrderResult(
                 signal_id=signal.id,
                 executor_name=executor.name,
-                success=False,
+                outcome=OrderOutcome.UNKNOWN,
                 account_id=executor.account_id,
                 latency_ms=elapsed,
                 error="timeout",
             )
         except Exception as exc:  # noqa: BLE001 - an executor must never break the fan-out
+            # Also UNKNOWN. The router cannot tell from here whether the
+            # exception came before the request left the process or after the
+            # broker had already accepted it. Only the executor knows that,
+            # and an executor certain of a rejection returns REJECTED itself
+            # rather than raising.
             elapsed = int((time.perf_counter() - started) * 1000)
             logger.exception("executor %s raised", executor.name)
             return OrderResult(
                 signal_id=signal.id,
                 executor_name=executor.name,
-                success=False,
+                outcome=OrderOutcome.UNKNOWN,
                 account_id=executor.account_id,
                 latency_ms=elapsed,
                 error=f"{type(exc).__name__}: {exc}",
@@ -137,7 +171,7 @@ class Router:
                     OrderResult(
                         signal_id=signal.id,
                         executor_name=executor.name,
-                        success=False,
+                        outcome=OrderOutcome.UNKNOWN,
                         account_id=executor.account_id,
                         latency_ms=int(timeout * 1000),
                         error=f"{type(outcome).__name__}: {outcome}",
@@ -146,6 +180,22 @@ class Router:
             else:
                 results.append(outcome)
         return results
+
+    async def close(self) -> None:
+        """Release every executor's resources.
+
+        Every executor, not just the enabled ones: `enabled` gates dispatch,
+        but a disabled executor was still constructed and may still be holding
+        whatever it opened. Failures are logged and swallowed rather than
+        raised -- this runs in Engine.run's teardown, often while an exception
+        is already on its way out, and one leg failing to close must not strand
+        the others any more than one leg failing to dispatch does.
+        """
+        for executor in self._executors:
+            try:
+                await executor.close()
+            except Exception:  # noqa: BLE001 - teardown never raises
+                logger.exception("executor %s failed to close", executor.name)
 
     async def dispatch(self, signal: Signal, session_date: date) -> list[OrderResult]:
         notifiers = self._notifiers()
@@ -159,6 +209,11 @@ class Router:
                 signal_id=result.signal_id,
                 executor_name=result.executor_name,
                 account_id=result.account_id,
+                # Both: `outcome` is the fact, `success` is the summary an
+                # operator greps for. Dropping success would break every
+                # existing journal reader; dropping outcome would lose the
+                # distinction this whole field exists to carry.
+                outcome=result.outcome,
                 success=result.success,
                 latency_ms=result.latency_ms,
                 error=result.error,

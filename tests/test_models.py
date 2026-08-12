@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from nq_agent.models import (
     Bar,
     Direction,
+    OrderOutcome,
     OrderResult,
     Position,
     PositionClose,
@@ -146,7 +147,7 @@ def test_order_result_and_veto_round_trip() -> None:
     result = OrderResult(
         signal_id="abc",
         executor_name="dryrun:tradeify",
-        success=True,
+        outcome=OrderOutcome.FILLED,
         account_id="tradeify",
         latency_ms=12,
     )

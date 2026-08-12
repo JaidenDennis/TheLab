@@ -28,6 +28,17 @@ class Executor(ABC):
     async def health_check(self) -> bool:
         """Cheap liveness probe, called once at startup."""
 
+    async def close(self) -> None:
+        """Release any provider resources. Called once during teardown.
+
+        Concrete, not abstract, unlike DataFeed.close: most executors hold
+        nothing and an abstract method would force every one of them (and
+        every test double) to write an empty body. The ones that do own
+        something -- a webhook executor holding an aiohttp.ClientSession is
+        the case this exists for -- override it.
+        """
+        return None
+
 
 class NotifyExecutor(Executor):
     """An executor that also carries out-of-band alerts.
