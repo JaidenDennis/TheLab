@@ -76,10 +76,14 @@ class RiskConfig(BaseModel):
     max_trailing_drawdown: Decimal | None = None
     # "equity" trails the high-water mark of realised + open P&L, so an
     # unrealised peak moves the mark and giving it back is a drawdown.
-    # "closed" trails realised balance only. Prop firms genuinely differ
-    # here, and picking the wrong one means the agent's limit and the firm's
-    # limit are measuring different things. "equity" is the conservative
-    # reading: it trips first.
+    # "closed" keeps the high-water mark on realised balance only -- an
+    # unrealised peak never raises it -- but an open LOSS still counts
+    # against the distance to the mark on both bases. That asymmetry is
+    # deliberate (see test_risk_unrealised): it can flatten earlier than a
+    # firm that marks strictly end-of-day, and early is the survivable
+    # direction. Prop firms genuinely differ here, and picking the wrong one
+    # means the agent's limit and the firm's limit are measuring different
+    # things. "equity" is the conservative reading: it trips first.
     trailing_drawdown_basis: Literal["equity", "closed"] = "equity"
     # Reconcile against the broker every N bars, on top of the startup and
     # post-UNKNOWN passes which always run when a position source is wired.

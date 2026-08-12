@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 from nq_agent.config import load_settings
-from nq_agent.models import Direction
+from nq_agent.models import Direction, signed_points
 from nq_agent.strategy.base import Strategy
 
 
@@ -41,8 +41,7 @@ class Trade:
     @property
     def points(self) -> Decimal:
         """Signed points per contract, in the direction of the position."""
-        move = self.exit_price - self.entry_price
-        return move if self.direction is Direction.LONG else -move
+        return signed_points(self.direction, self.entry_price, self.exit_price)
 
     @property
     def points_total(self) -> Decimal:

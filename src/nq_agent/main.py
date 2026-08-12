@@ -19,7 +19,6 @@ from nq_agent.feed.replay import ReplayFeed
 from nq_agent.journal import Journal
 from nq_agent.models import (
     Bar,
-    Direction,
     DivergenceKind,
     Position,
     PositionClose,
@@ -32,7 +31,7 @@ from nq_agent.reconcile import PositionSource, Reconciler
 from nq_agent.risk.accounts import AccountRegistry
 from nq_agent.risk.limits import RiskManager
 from nq_agent.router import Router
-from nq_agent.session import SessionManager
+from nq_agent.session import SessionManager, build_protective_flatten, write_signal_emitted
 from nq_agent.state import StateStore
 from nq_agent.strategy.always import AlwaysStrategy
 from nq_agent.strategy.base import Strategy
@@ -374,31 +373,35 @@ class Engine:
         if breached is None:
             return None
 
-        signal = Signal(
-            timestamp=bar.close_time,
-            symbol=position.symbol,
-            intent=SignalIntent.FLATTEN,
-            direction=position.direction,
-            quantity=position.quantity,
-            reason=f"risk limit breached: {breached.value}",
+        if self._risk.reconciliation_required:
+            # The position this flatten would close is exactly the belief
+            # reconciliation has flagged as doubtful. If the broker is in
+            # fact flat, the "flatten" is a real order that opens a fresh,
+            # unmanaged position nobody is watching. Withheld, not skipped:
+            # the breach re-fires on every bar, so the flatten goes out on
+            # the first bar after a reconciliation pass agrees -- and the
+            # session cutoff flatten, which deliberately does go out on a
+            # doubtful belief rather than hold overnight, is the backstop.
+            await self._journal.write(
+                "risk_flatten_withheld",
+                session_date,
+                reason=breached.reason,
+                detail=breached.detail,
+            )
+            return None
+
+        signal = build_protective_flatten(
+            position, bar.close_time, f"risk limit breached: {breached.reason.value}"
         )
         await self._journal.write(
             "risk_flatten",
             session_date,
             signal_id=signal.id,
-            reason=breached,
+            reason=breached.reason,
+            detail=breached.detail,
             unrealised=self._risk.unrealised,
         )
-        await self._journal.write(
-            "signal_emitted",
-            session_date,
-            signal_id=signal.id,
-            source="risk",
-            intent=signal.intent,
-            direction=signal.direction,
-            quantity=signal.quantity,
-            reason=signal.reason,
-        )
+        await write_signal_emitted(self._journal, session_date, signal, source="risk")
         # Blocks new entries as well: the limit that just forced an exit is
         # still breached on the next bar, and FLATTEN bypasses the veto so
         # this does not prevent the exit itself.
@@ -421,10 +424,8 @@ class Engine:
         is charged here rather than left to the report, because a limit that
         ignores costs stops trading later than the broker's own numbers do.
         """
-        move = closed.exit_price - closed.position.entry_price
-        points = move if closed.position.direction is Direction.LONG else -move
         contract = self.settings.contract
-        gross = points * closed.position.quantity * contract.point_value
+        gross = closed.position.pnl(closed.exit_price, contract.point_value)
         return gross - contract.commission_per_round_turn * closed.position.quantity
 
     async def _journal_close(self, closed: PositionClose, session_date: date) -> None:

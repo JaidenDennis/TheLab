@@ -1,11 +1,50 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from nq_agent.clock import SessionCalendar
 from nq_agent.journal import Journal
 from nq_agent.models import Bar, Position, Signal, SignalIntent
 from nq_agent.strategy.base import Strategy
+
+
+def build_protective_flatten(position: Position, timestamp: datetime, reason: str) -> Signal:
+    """The FLATTEN that closes an open position on the system's behalf.
+
+    SessionManager's cutoff and the engine's risk breach are the only two
+    components besides the strategy allowed to generate a signal, and both
+    must produce the same shape. One definition, so a field added to the
+    flatten cannot be added to one emitter and missed in the other.
+    """
+    return Signal(
+        timestamp=timestamp,
+        symbol=position.symbol,
+        intent=SignalIntent.FLATTEN,
+        direction=position.direction,
+        quantity=position.quantity,
+        reason=reason,
+    )
+
+
+async def write_signal_emitted(
+    journal: Journal, session_date: date, signal: Signal, source: str
+) -> None:
+    """The signal_emitted record for a protective flatten.
+
+    Shared for the same reason build_protective_flatten is: journal readers
+    parse this record, and two hand-maintained copies of its schema is how
+    they end up parsing inconsistently.
+    """
+    await journal.write(
+        "signal_emitted",
+        session_date,
+        signal_id=signal.id,
+        source=source,
+        intent=signal.intent,
+        direction=signal.direction,
+        quantity=signal.quantity,
+        reason=signal.reason,
+    )
 
 
 class SessionManager:
@@ -95,22 +134,8 @@ class SessionManager:
             return None
 
         self._flattened_for = session_date
-        signal = Signal(
-            timestamp=bar.close_time,
-            symbol=position.symbol,
-            intent=SignalIntent.FLATTEN,
-            direction=position.direction,
-            quantity=position.quantity,
-            reason="session cutoff reached with an open position",
+        signal = build_protective_flatten(
+            position, bar.close_time, "session cutoff reached with an open position"
         )
-        await self._journal.write(
-            "signal_emitted",
-            session_date,
-            signal_id=signal.id,
-            source="session_manager",
-            intent=signal.intent,
-            direction=signal.direction,
-            quantity=signal.quantity,
-            reason=signal.reason,
-        )
+        await write_signal_emitted(self._journal, session_date, signal, source="session_manager")
         return signal

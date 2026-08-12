@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 from nq_agent.clock import SessionCalendar
 from nq_agent.models import Direction, Position, RiskVeto, Signal, SignalIntent, VetoReason
+
+
+@dataclass(frozen=True)
+class Breach:
+    """A money limit currently breached, with the figure that tripped it.
+
+    The detail is computed alongside the decision, not reconstructed by the
+    caller, so the number journaled is always the number that was measured.
+    """
+
+    reason: VetoReason
+    detail: str
 
 
 class RiskManager:
@@ -24,7 +38,7 @@ class RiskManager:
         kill_switch_path: Path,
         max_daily_loss: Decimal | None = None,
         max_trailing_drawdown: Decimal | None = None,
-        trailing_drawdown_basis: str = "equity",
+        trailing_drawdown_basis: Literal["equity", "closed"] = "equity",
     ) -> None:
         self._calendar = calendar
         self._max_trades = max_trades_per_day
@@ -38,11 +52,9 @@ class RiskManager:
         self._max_drawdown = (
             abs(max_trailing_drawdown) if max_trailing_drawdown is not None else None
         )
-        if trailing_drawdown_basis not in ("equity", "closed"):
-            raise ValueError(
-                "trailing_drawdown_basis must be 'equity' or 'closed', "
-                f"got {trailing_drawdown_basis!r}"
-            )
+        # The Literal type is the validation: config.py declares the same
+        # Literal, so an unknown basis is rejected at config load, and a
+        # direct constructor call with a bad string is a type error.
         self._basis = trailing_drawdown_basis
         self._daily_pnl = Decimal("0")
         self._equity = Decimal("0")
@@ -51,6 +63,11 @@ class RiskManager:
         # is realised only, because the two are reset on different events: a
         # close realises the open figure and must not leave it double-counted.
         self._unrealised = Decimal("0")
+        # What the open position was already marked at when today's session
+        # started. The daily limit measures today's damage, so a position
+        # carried across the boundary must not charge yesterday's open move
+        # against today's fresh limit -- only the move since this mark counts.
+        self._session_open_mark = Decimal("0")
         self._reconciliation_detail: str | None = None
 
     @property
@@ -74,10 +91,12 @@ class RiskManager:
         """
         if position is None:
             self._unrealised = Decimal("0")
+            # The mark belonged to the position that just closed. A new
+            # position opened later today starts measuring from zero, not
+            # from an offset left behind by a different trade.
+            self._session_open_mark = Decimal("0")
         else:
-            move = price - position.entry_price
-            points = move if position.direction is Direction.LONG else -move
-            self._unrealised = points * position.quantity * point_value
+            self._unrealised = position.pnl(price, point_value)
 
         if self._basis == "equity":
             # An unrealised peak moves the mark. This is the rule that
@@ -85,25 +104,40 @@ class RiskManager:
             # back is a 1000 drawdown, even though nothing was ever realised.
             self._high_water = max(self._high_water, self._equity + self._unrealised)
 
-    def _breach_reason(self) -> VetoReason | None:
+    def breach(self) -> Breach | None:
         """Which money limit is currently breached, if any.
 
         Shared by check() -- which turns it into a veto on new entries -- and
-        breach(), which the engine uses to decide whether to flatten. Vetoing
-        is not a sufficient response when a position is already open.
+        the engine, which uses it to decide whether to flatten. Vetoing is not
+        a sufficient response when a position is already open.
+
+        The daily figure counts the open position's move since the session
+        started, not since entry: a position carried across the boundary has
+        yesterday's damage in yesterday's figure already, and the firm's
+        per-day limit is measuring today. The drawdown figure uses the full
+        since-entry mark, because equity is measured over the life of the
+        account, not the day.
         """
         if self._max_daily_loss is not None:
-            daily = self._daily_pnl + self._unrealised
+            open_today = self._unrealised - self._session_open_mark
+            daily = self._daily_pnl + open_today
             if -daily >= self._max_daily_loss:
-                return VetoReason.DAILY_LOSS_LIMIT
+                return Breach(
+                    VetoReason.DAILY_LOSS_LIMIT,
+                    f"down {-daily} on the session "
+                    f"(realised {self._daily_pnl}, open move today {open_today}), "
+                    f"limit is {self._max_daily_loss}",
+                )
         if self._max_drawdown is not None:
             equity = self._equity + self._unrealised
             if self._high_water - equity >= self._max_drawdown:
-                return VetoReason.TRAILING_DRAWDOWN
+                return Breach(
+                    VetoReason.TRAILING_DRAWDOWN,
+                    f"{self._high_water - equity} below the {self._high_water} "
+                    f"high-water mark (open {self._unrealised}), "
+                    f"limit is {self._max_drawdown}",
+                )
         return None
-
-    def breach(self) -> VetoReason | None:
-        return self._breach_reason()
 
     def require_reconciliation(self, detail: str) -> None:
         """Block new entries until the agent and the broker agree again.
@@ -142,6 +176,10 @@ class RiskManager:
         it overnight either.
         """
         self._daily_pnl = Decimal("0")
+        # A position still open at the boundary re-bases here: its move so
+        # far belongs to the session that just ended, and only what it does
+        # from this mark on counts against the new day's limit.
+        self._session_open_mark = self._unrealised
 
     def snapshot(self) -> dict[str, str]:
         """Serialisable P&L state, for the same reason SessionState exists.
@@ -153,6 +191,10 @@ class RiskManager:
             "daily_pnl": str(self._daily_pnl),
             "equity": str(self._equity),
             "high_water": str(self._high_water),
+            # Without this, a restart mid-session with a carried position
+            # re-bases its mark to zero and charges the whole since-entry
+            # move against today's limit again.
+            "session_open_mark": str(self._session_open_mark),
             # The duplicate-signal window too: it is in-memory only otherwise,
             # so a process that restarts inside the window comes back with an
             # empty one and waves through the exact repeat it exists to stop.
@@ -173,6 +215,7 @@ class RiskManager:
         self._daily_pnl = Decimal(str(state.get("daily_pnl", "0")))
         self._equity = Decimal(str(state.get("equity", "0")))
         self._high_water = Decimal(str(state.get("high_water", "0")))
+        self._session_open_mark = Decimal(str(state.get("session_open_mark", "0")))
         self._recent = [
             (datetime.fromisoformat(ts), symbol, Direction(direction))
             for ts, symbol, direction in json.loads(str(state.get("recent", "[]")))
@@ -223,23 +266,9 @@ class RiskManager:
         # Money checks before the trade-count check: hitting a loss limit is
         # the more serious condition and should be the reason journaled when
         # both apply.
-        breached = self._breach_reason()
-        if breached is VetoReason.DAILY_LOSS_LIMIT:
-            daily = self._daily_pnl + self._unrealised
-            return veto(
-                breached,
-                f"down {-daily} on the session "
-                f"(realised {self._daily_pnl}, open {self._unrealised}), "
-                f"limit is {self._max_daily_loss}",
-            )
-        if breached is VetoReason.TRAILING_DRAWDOWN:
-            equity = self._equity + self._unrealised
-            return veto(
-                breached,
-                f"{self._high_water - equity} below the {self._high_water} "
-                f"high-water mark (open {self._unrealised}), "
-                f"limit is {self._max_drawdown}",
-            )
+        breached = self.breach()
+        if breached is not None:
+            return veto(breached.reason, breached.detail)
 
         if trades_taken >= self._max_trades:
             return veto(

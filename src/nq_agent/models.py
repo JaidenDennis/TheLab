@@ -163,6 +163,18 @@ class OrderResult(Frozen):
         return self.outcome is OrderOutcome.UNKNOWN
 
 
+def signed_points(direction: Direction, entry_price: Decimal, exit_price: Decimal) -> Decimal:
+    """Signed points per contract from entry to exit, in the trade's direction.
+
+    The one definition of which way the sign goes. The risk mark, the realised
+    booking and the backtest report all measure money through this: if the
+    sign convention ever changes, it changes for all of them at once, and the
+    limits stay measured on the same arithmetic as the P&L they gate.
+    """
+    move = exit_price - entry_price
+    return move if direction is Direction.LONG else -move
+
+
 class Position(Frozen):
     symbol: str
     direction: Direction
@@ -181,6 +193,15 @@ class Position(Frozen):
     @property
     def is_managed(self) -> bool:
         return self.stop_price is not None and self.target_price is not None
+
+    def pnl(self, price: Decimal, point_value: Decimal) -> Decimal:
+        """This position's value at `price`, in account currency.
+
+        Commission is deliberately not charged here: an open position has not
+        paid its round turn yet, and the one place that books it is
+        Engine._realised_pnl on close.
+        """
+        return signed_points(self.direction, self.entry_price, price) * self.quantity * point_value
 
 
 class BrokerPosition(Frozen):

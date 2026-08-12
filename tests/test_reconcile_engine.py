@@ -336,6 +336,61 @@ async def test_a_failed_query_does_not_crash_the_run(tmp_path: Path) -> None:
     assert engine is not None
 
 
+# --- the risk flatten waits for a belief it can trust ----------------------
+
+
+def _declining_fixture(tmp_path: Path) -> Path:
+    """An entry bar, a shallow decline that breaches a $20 daily limit without
+    ever reaching the always-strategy's 10-point stop, then a jump past the
+    cutoff so the session flatten has a bar to fire on."""
+    ticks = [
+        ("13:30:30", "20000.00"),  # entry bar: always enters long at 20000
+        ("13:31:30", "20000.00"),  # run 1 is killed after this bar
+        ("13:32:30", "19998.00"),  # -2 points = -$40, past the $20 limit
+        ("13:33:30", "19996.00"),
+        ("13:34:30", "19996.00"),
+        ("20:30:30", "19996.00"),  # past the cutoff
+        ("20:31:30", "19996.00"),  # closes the cutoff bar
+    ]
+    fixture = tmp_path / "declining.jsonl"
+    fixture.write_text(
+        "".join(
+            json.dumps({"ts": f"2026-07-15T{hhmmss}+00:00", "price": price, "size": 1}) + "\n"
+            for hhmmss, price in ticks
+        )
+    )
+    return fixture
+
+
+async def test_a_risk_breach_does_not_flatten_an_unreconciled_position(
+    tmp_path: Path,
+) -> None:
+    """A FLATTEN sent from a doubtful belief is a real order: if the broker is
+    in fact flat, it opens a fresh position nobody is watching. The breach
+    re-fires every bar, so the flatten goes out as soon as a reconciliation
+    pass agrees -- and the session cutoff, which deliberately does dispatch on
+    a doubtful belief rather than hold overnight, remains the backstop."""
+    config = config_for(tmp_path, "  max_daily_loss: 20\n")
+    fixture = _declining_fixture(tmp_path)
+
+    # Run 1: enter, then die while the position is open and unstressed.
+    await run_from_config(config, fixture, "always", max_bars=2)
+
+    # Run 2: resume it against a broker that cannot be asked, so the startup
+    # reconciliation fails and the position belief stays doubtful while the
+    # decline breaches the daily limit.
+    await run_from_config(config, fixture, "always", None, position_source=ExplodingSource())
+
+    assert "risk_flatten_withheld" in kinds(tmp_path), "the withhold was never journaled"
+    assert "risk_flatten" not in kinds(tmp_path), (
+        "a protective flatten was dispatched from a position belief that "
+        "reconciliation had flagged as doubtful"
+    )
+    closes = [e for e in events(tmp_path) if e["event"] == "position_closed"]
+    assert closes, "the cutoff backstop never closed the position"
+    assert closes[0]["exit_reason"] == "FLATTEN"
+
+
 # --- flatten is never blocked ----------------------------------------------
 
 

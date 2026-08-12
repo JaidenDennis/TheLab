@@ -60,6 +60,11 @@ def short_at(entry: str, quantity: int = 1) -> Position:
 POINT = Decimal("20")  # NQ
 
 
+def _reason(risk: RiskManager) -> VetoReason | None:
+    breach = risk.breach()
+    return breach.reason if breach is not None else None
+
+
 # --- marking to market ------------------------------------------------------
 
 
@@ -225,7 +230,7 @@ def test_a_breach_is_reported_so_the_engine_can_flatten(tmp_path: Path) -> None:
 
     risk.mark_to_market(long_at("20100"), Decimal("20070"), POINT)  # -600
 
-    assert risk.breach() is VetoReason.DAILY_LOSS_LIMIT
+    assert _reason(risk) is VetoReason.DAILY_LOSS_LIMIT
 
 
 def test_a_drawdown_breach_is_reported(tmp_path: Path) -> None:
@@ -234,7 +239,7 @@ def test_a_drawdown_breach_is_reported(tmp_path: Path) -> None:
 
     risk.mark_to_market(long_at("20100"), Decimal("20070"), POINT)
 
-    assert risk.breach() is VetoReason.TRAILING_DRAWDOWN
+    assert _reason(risk) is VetoReason.TRAILING_DRAWDOWN
 
 
 def test_a_realised_only_breach_is_still_reported(tmp_path: Path) -> None:
@@ -243,7 +248,7 @@ def test_a_realised_only_breach_is_still_reported(tmp_path: Path) -> None:
     risk = manager(tmp_path, max_daily_loss=Decimal("500"))
     risk.record_realised_pnl(Decimal("-600"))
 
-    assert risk.breach() is VetoReason.DAILY_LOSS_LIMIT
+    assert _reason(risk) is VetoReason.DAILY_LOSS_LIMIT
 
 
 def test_the_open_mark_survives_a_restart(tmp_path: Path) -> None:
@@ -256,7 +261,7 @@ def test_the_open_mark_survives_a_restart(tmp_path: Path) -> None:
     revived.restore(risk.snapshot())
     revived.mark_to_market(long_at("20100"), Decimal("20075"), POINT)  # -500
 
-    assert revived.breach() is VetoReason.TRAILING_DRAWDOWN
+    assert _reason(revived) is VetoReason.TRAILING_DRAWDOWN
 
 
 def _entry():
@@ -283,7 +288,70 @@ def test_session_rollover_keeps_the_high_water_mark(tmp_path: Path) -> None:
     risk.start_session(date(2026, 7, 16))
     risk.record_realised_pnl(Decimal("-600"))
 
-    assert risk.breach() is VetoReason.TRAILING_DRAWDOWN
+    assert _reason(risk) is VetoReason.TRAILING_DRAWDOWN
+
+
+# --- a carried position and the daily limit --------------------------------
+
+
+def test_a_carried_position_charges_only_todays_move_to_the_daily_limit(
+    tmp_path: Path,
+) -> None:
+    """Yesterday's open loss is yesterday's. The firm's daily limit measures
+    today, so a position that survived the boundary re-bases at the rollover
+    and only its move from there counts against the fresh limit."""
+    risk = manager(tmp_path, max_daily_loss=Decimal("500"))
+    risk.mark_to_market(long_at("20100"), Decimal("20070"), POINT)  # -600 since entry
+
+    risk.start_session(date(2026, 7, 16))
+    risk.mark_to_market(long_at("20100"), Decimal("20070"), POINT)  # unchanged today
+
+    assert risk.breach() is None, "yesterday's move was charged to today's limit"
+
+    risk.mark_to_market(long_at("20100"), Decimal("20040"), POINT)  # -600 more, today
+
+    assert _reason(risk) is VetoReason.DAILY_LOSS_LIMIT
+
+
+def test_the_rollover_mark_clears_when_the_position_closes(tmp_path: Path) -> None:
+    """The re-base belonged to the carried position. A new trade opened later
+    the same day measures from zero -- a stale offset would let it hide a
+    fresh loss exactly the size of the old one."""
+    risk = manager(tmp_path, max_daily_loss=Decimal("500"))
+    risk.mark_to_market(long_at("20100"), Decimal("20070"), POINT)  # -600 carried
+    risk.start_session(date(2026, 7, 16))
+
+    risk.mark_to_market(None, Decimal("20070"), POINT)  # carried position closes
+    risk.mark_to_market(long_at("20070"), Decimal("20040"), POINT)  # new trade, -600
+
+    assert _reason(risk) is VetoReason.DAILY_LOSS_LIMIT
+
+
+def test_the_rollover_mark_survives_a_restart(tmp_path: Path) -> None:
+    """A restart mid-session with a carried position must not re-base the
+    mark to zero, or the whole since-entry move is charged to today again."""
+    risk = manager(tmp_path, max_daily_loss=Decimal("500"))
+    risk.mark_to_market(long_at("20100"), Decimal("20070"), POINT)  # -600 carried
+    risk.start_session(date(2026, 7, 16))
+
+    revived = manager(tmp_path, max_daily_loss=Decimal("500"))
+    revived.restore(risk.snapshot())
+    revived.mark_to_market(long_at("20100"), Decimal("20070"), POINT)  # unchanged today
+
+    assert revived.breach() is None
+
+
+def test_the_breach_detail_reports_the_figures_that_tripped_it(tmp_path: Path) -> None:
+    """The journaled detail is computed alongside the decision, so the number
+    an operator reads is the number that was measured."""
+    risk = manager(tmp_path, max_daily_loss=Decimal("500"))
+    risk.record_realised_pnl(Decimal("-300"))
+    risk.mark_to_market(long_at("20100"), Decimal("20090"), POINT)  # -200
+
+    breach = risk.breach()
+    assert breach is not None
+    assert "down 500" in breach.detail
+    assert "realised -300" in breach.detail
 
 
 # --- end to end: the breach has to reach a broker --------------------------
