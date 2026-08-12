@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from nq_agent.clock import SessionCalendar
-from nq_agent.models import Direction, RiskVeto, Signal, SignalIntent, VetoReason
+from nq_agent.models import Direction, Position, RiskVeto, Signal, SignalIntent, VetoReason
 
 
 class RiskManager:
@@ -24,6 +24,7 @@ class RiskManager:
         kill_switch_path: Path,
         max_daily_loss: Decimal | None = None,
         max_trailing_drawdown: Decimal | None = None,
+        trailing_drawdown_basis: str = "equity",
     ) -> None:
         self._calendar = calendar
         self._max_trades = max_trades_per_day
@@ -37,10 +38,72 @@ class RiskManager:
         self._max_drawdown = (
             abs(max_trailing_drawdown) if max_trailing_drawdown is not None else None
         )
+        if trailing_drawdown_basis not in ("equity", "closed"):
+            raise ValueError(
+                "trailing_drawdown_basis must be 'equity' or 'closed', "
+                f"got {trailing_drawdown_basis!r}"
+            )
+        self._basis = trailing_drawdown_basis
         self._daily_pnl = Decimal("0")
         self._equity = Decimal("0")
         self._high_water = Decimal("0")
+        # Mark-to-market on the open position. Kept apart from _equity, which
+        # is realised only, because the two are reset on different events: a
+        # close realises the open figure and must not leave it double-counted.
+        self._unrealised = Decimal("0")
         self._reconciliation_detail: str | None = None
+
+    @property
+    def unrealised(self) -> Decimal:
+        return self._unrealised
+
+    def mark_to_market(
+        self, position: Position | None, price: Decimal, point_value: Decimal
+    ) -> None:
+        """Value the open position at `price`, in account currency.
+
+        Called on every bar. A prop firm's trailing limit watches equity
+        including the open position, so a limit measured on closed trades
+        alone can sit comfortably inside itself while the firm is closing the
+        account -- the position is down 800, the agent has realised nothing,
+        and both of its numbers look fine.
+
+        `position is None` clears the figure: once a position closes its
+        result is realised through record_realised_pnl, and leaving the mark
+        behind would count the same money twice.
+        """
+        if position is None:
+            self._unrealised = Decimal("0")
+        else:
+            move = price - position.entry_price
+            points = move if position.direction is Direction.LONG else -move
+            self._unrealised = points * position.quantity * point_value
+
+        if self._basis == "equity":
+            # An unrealised peak moves the mark. This is the rule that
+            # surprises people: being up 1000 on an open trade and giving it
+            # back is a 1000 drawdown, even though nothing was ever realised.
+            self._high_water = max(self._high_water, self._equity + self._unrealised)
+
+    def _breach_reason(self) -> VetoReason | None:
+        """Which money limit is currently breached, if any.
+
+        Shared by check() -- which turns it into a veto on new entries -- and
+        breach(), which the engine uses to decide whether to flatten. Vetoing
+        is not a sufficient response when a position is already open.
+        """
+        if self._max_daily_loss is not None:
+            daily = self._daily_pnl + self._unrealised
+            if -daily >= self._max_daily_loss:
+                return VetoReason.DAILY_LOSS_LIMIT
+        if self._max_drawdown is not None:
+            equity = self._equity + self._unrealised
+            if self._high_water - equity >= self._max_drawdown:
+                return VetoReason.TRAILING_DRAWDOWN
+        return None
+
+    def breach(self) -> VetoReason | None:
+        return self._breach_reason()
 
     def require_reconciliation(self, detail: str) -> None:
         """Block new entries until the agent and the broker agree again.
@@ -160,20 +223,23 @@ class RiskManager:
         # Money checks before the trade-count check: hitting a loss limit is
         # the more serious condition and should be the reason journaled when
         # both apply.
-        if self._max_daily_loss is not None and -self._daily_pnl >= self._max_daily_loss:
+        breached = self._breach_reason()
+        if breached is VetoReason.DAILY_LOSS_LIMIT:
+            daily = self._daily_pnl + self._unrealised
             return veto(
-                VetoReason.DAILY_LOSS_LIMIT,
-                f"down {-self._daily_pnl} on the session, limit is {self._max_daily_loss}",
+                breached,
+                f"down {-daily} on the session "
+                f"(realised {self._daily_pnl}, open {self._unrealised}), "
+                f"limit is {self._max_daily_loss}",
             )
-
-        if self._max_drawdown is not None:
-            drawdown = self._high_water - self._equity
-            if drawdown >= self._max_drawdown:
-                return veto(
-                    VetoReason.TRAILING_DRAWDOWN,
-                    f"{drawdown} below the {self._high_water} high-water mark, "
-                    f"limit is {self._max_drawdown}",
-                )
+        if breached is VetoReason.TRAILING_DRAWDOWN:
+            equity = self._equity + self._unrealised
+            return veto(
+                breached,
+                f"{self._high_water - equity} below the {self._high_water} "
+                f"high-water mark (open {self._unrealised}), "
+                f"limit is {self._max_drawdown}",
+            )
 
         if trades_taken >= self._max_trades:
             return veto(

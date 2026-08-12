@@ -80,6 +80,24 @@ Four controls exist. Two count events, two count money.
 | Daily loss limit | `risk.max_daily_loss` | resets daily |
 | Trailing drawdown | `risk.max_trailing_drawdown` | **life of the account** |
 
+Both money limits count the **open position**, marked to market on every bar,
+not just closed trades. A position down $800 counts against the daily limit
+immediately — which is what the firm is doing too.
+
+`risk.trailing_drawdown_basis` decides how the high-water mark moves, and firms
+genuinely differ. Get it wrong and your limit and theirs measure different
+things:
+
+- `equity` (default) — an unrealised peak raises the mark. Up $1,000 on an open
+  trade and giving $600 back is a $600 drawdown, even though nothing was
+  realised and the day is still green. Most intraday-trailing firms work this way.
+- `closed` — only realised balance raises the mark. Open losses still count
+  against it; open profits do not raise it.
+
+**A breach on an open position emits a protective FLATTEN** (journaled as
+`risk_flatten`) and halts further entries. Vetoing entries is the right response
+when you are flat and no response at all when the position is already on.
+
 The money limits are opt-in and default to null. A live config that omits them
 would start happily with no loss limit at all, so `check_live_safety` refuses
 to run any enabled `webhook` executor unless both are set. Set them **below**
@@ -89,11 +107,10 @@ Trailing drawdown is measured from the account's high-water mark and does not
 reset overnight, because the firm is not resetting it either. Up 1000 then back
 to 600 is a 400 drawdown even though the day is green.
 
-**Known limitation:** both limits are measured on *realised, closed* trades.
-An open position moving against you does not trip either one. A prop firm's
-trailing limit usually watches unrealised equity too, so the firm can breach
-you before this system reacts. Size positions so a single stop-out cannot cross
-the limit on its own.
+**Known limitation:** the open position is marked on **bar closes**. A spike
+that breaches the limit and retraces inside a single bar is never seen, and the
+firm's own monitoring is tick-by-tick. Size positions so a single stop-out
+cannot cross the limit on its own — that remains the real protection.
 
 ---
 
@@ -296,7 +313,8 @@ Listed so nothing here is a surprise later.
 - **Reconciliation has no broker adapter.** The layer is built and tested, but
   `PositionSource` needs an implementation against your broker's position
   endpoint before it does anything live.
-- **No unrealised-P&L risk.** Limits act on closed trades only.
+- **Unrealised P&L is marked on bar closes only**, not tick by tick, so an
+  intra-bar spike through a limit is invisible to it.
 - **Contract roll.** `NQ.c.0` is volume-based continuous, so the roll happens
   mid-session. Do not hold a position through one.
 - **Multi-day replay resume.** A replay killed and restarted resumes the

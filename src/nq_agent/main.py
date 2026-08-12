@@ -354,6 +354,57 @@ class Engine:
         await self._alert(f"reconciliation divergence: {summary}")
         return False
 
+    async def _risk_flatten(self, bar: Bar, session_date: date) -> Signal | None:
+        """Emit a protective FLATTEN when a money limit is breached.
+
+        Vetoing entries is the right response to a limit when you are flat and
+        no response at all when you are not: the position is already on, and
+        the only thing that helps is getting out. A limit that watches equity
+        including the open trade -- which is what a prop firm's trailing
+        drawdown does -- is meaningless without this.
+
+        Deliberately does not touch the cutoff flatten. SessionManager owns
+        that one and has already returned it by the time this is called, so
+        this only ever fires when the session is otherwise still running.
+        """
+        position = self._tracker.position
+        if position is None:
+            return None
+        breached = self._risk.breach()
+        if breached is None:
+            return None
+
+        signal = Signal(
+            timestamp=bar.close_time,
+            symbol=position.symbol,
+            intent=SignalIntent.FLATTEN,
+            direction=position.direction,
+            quantity=position.quantity,
+            reason=f"risk limit breached: {breached.value}",
+        )
+        await self._journal.write(
+            "risk_flatten",
+            session_date,
+            signal_id=signal.id,
+            reason=breached,
+            unrealised=self._risk.unrealised,
+        )
+        await self._journal.write(
+            "signal_emitted",
+            session_date,
+            signal_id=signal.id,
+            source="risk",
+            intent=signal.intent,
+            direction=signal.direction,
+            quantity=signal.quantity,
+            reason=signal.reason,
+        )
+        # Blocks new entries as well: the limit that just forced an exit is
+        # still breached on the next bar, and FLATTEN bypasses the veto so
+        # this does not prevent the exit itself.
+        self.is_halted = True
+        return signal
+
     async def _alert(self, message: str) -> None:
         for executor in self.router.enabled:
             if isinstance(executor, NotifyExecutor):
@@ -649,9 +700,19 @@ class Engine:
             if closed is not None:
                 await self._journal_close(closed, session_date)
 
+            # Mark the open position before anything decides anything. Every
+            # money limit is measured on equity including it, so a stale mark
+            # means the checks below run on last bar's account.
+            self._risk.mark_to_market(
+                self._tracker.position, bar.close, self.settings.contract.point_value
+            )
+
             self._context.record_bar(bar)
             self._context.set_position(self._tracker.position)
             self._context.set_trades_taken(self.trades_taken)
+
+            if flatten_signal is None and not warmup:
+                flatten_signal = await self._risk_flatten(bar, session_date)
 
             if flatten_signal is not None:
                 await self._handle_signal(flatten_signal, bar, warmup, already_journaled=True)
@@ -830,6 +891,7 @@ async def run_from_config(
         kill_switch_path=settings.risk.kill_switch_path,
         max_daily_loss=settings.risk.max_daily_loss,
         max_trailing_drawdown=settings.risk.max_trailing_drawdown,
+        trailing_drawdown_basis=settings.risk.trailing_drawdown_basis,
     )
     if prior is not None:
         risk.restore(prior.risk_state)
