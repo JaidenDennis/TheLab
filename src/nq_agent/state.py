@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
@@ -29,13 +30,23 @@ class StateStore:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path)
 
+    # `with conn:` commits or rolls back the transaction -- it does NOT close
+    # the connection, which is why every one of these pairs it with closing().
+    # Without that, the handle lives until the garbage collector reaches it,
+    # and the connection opened by the most recent to_thread call stays alive
+    # in that now-idle worker thread until the thread happens to run something
+    # else. On POSIX an open handle costs nothing (unlink works regardless), so
+    # this read as benign there; on Windows an open handle locks the file, so
+    # state.db could not be deleted, renamed or swapped while the agent ran.
+    # Closing a database handle should not depend on GC timing on any platform.
+
     def _init_sync(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(SCHEMA)
 
     def _save_sync(self, session_date: str, payload: str) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 "INSERT INTO session_state (session_date, payload) VALUES (?, ?) "
                 "ON CONFLICT(session_date) DO UPDATE SET payload = excluded.payload",
@@ -43,7 +54,7 @@ class StateStore:
             )
 
     def _load_sync(self, session_date: str) -> str | None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT payload FROM session_state WHERE session_date = ?", (session_date,)
             ).fetchone()
