@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typing
 from datetime import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +27,37 @@ class ContextConfig(BaseModel):
     history_bars: int = 500
 
 
+class FeedConfig(BaseModel):
+    """Reconnect policy for a live feed. See feed/reconnecting.py."""
+
+    model_config = ConfigDict(frozen=True)
+
+    max_reconnect_attempts: int = 5
+    initial_backoff_seconds: float = 1.0
+    max_backoff_seconds: float = 60.0
+
+
+class ContractConfig(BaseModel):
+    """What one point of price movement is worth.
+
+    Nothing in the trading path uses this -- signals carry absolute prices and
+    the executors convert. It exists so P&L can be expressed in money, which
+    means every number the backtest report prints depends on it being right
+    for the instrument actually being traded. NQ and MNQ differ by 10x here,
+    so a wrong value does not look wrong, it just scales every result.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    point_value: Decimal = Decimal("20")  # NQ = $20/point, MNQ = $2/point
+    tick_size: Decimal = Decimal("0.25")
+    # Round turn: commission plus exchange and clearing fees, both sides.
+    # Defaults to zero because the real figure is broker-specific, and a
+    # backtest silently netting a made-up cost is worse than one that reports
+    # its costs as zero and says so.
+    commission_per_round_turn: Decimal = Decimal("0")
+
+
 class RiskConfig(BaseModel):
     """Deliberately the one unfrozen config model.
 
@@ -36,6 +68,12 @@ class RiskConfig(BaseModel):
     max_trades_per_day: int = 2
     duplicate_window_seconds: int = 60
     kill_switch_path: Path | None = None
+    # Both in account currency, both magnitudes ("500" = stop after losing
+    # 500), both opt-in. null means the limit is not enforced -- which is the
+    # right default for a replay or a backtest and the wrong one for a funded
+    # account, so live.yaml sets them.
+    max_daily_loss: Decimal | None = None
+    max_trailing_drawdown: Decimal | None = None
 
 
 class RouterConfig(BaseModel):
@@ -68,7 +106,16 @@ class Settings(BaseSettings):
     timeframes: list[str] = Field(default_factory=lambda: ["1m", "5m"])
     data_dir: Path = Path("./var")
     session: SessionConfig = SessionConfig()
+    contract: ContractConfig = ContractConfig()
     context: ContextConfig = ContextConfig()
+    feed: FeedConfig = FeedConfig()
+
+    # Provider symbology, not the internal `symbol` above. ".c.0" is
+    # Databento's continuous front-month: NQ rolls quarterly, and a hardcoded
+    # dated contract silently stops producing data after expiry, which looks
+    # exactly like a quiet market.
+    databento_symbol: str = "NQ.c.0"
+    databento_dataset: str = "GLBX.MDP3"
     risk: RiskConfig = RiskConfig()
     router: RouterConfig = RouterConfig()
     executors: list[ExecutorConfig] = Field(default_factory=list)

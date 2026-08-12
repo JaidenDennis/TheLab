@@ -13,7 +13,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Live trading only. Kept out of the base install so a replay or a backtest
+# needs neither a market-data SDK nor an HTTP client, and so the test suite
+# that covers steps 1-10 runs without them.
+live = [
+    "databento>=0.83",
+    "aiohttp>=3.9",
+]
 dev = [
+    "aiohttp>=3.9",
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",

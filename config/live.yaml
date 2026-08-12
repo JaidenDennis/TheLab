@@ -1,3 +1,28 @@
+# Live trading. Read docs/RUNBOOK.md before using this file.
+#
+# The two risk limits below are the ones that keep a prop account alive. They
+# default to null (not enforced) in base.yaml, which is right for a replay and
+# wrong for a funded account, so they are set explicitly here. Set them BELOW
+# your prop firm's actual limits -- the agent stopping first is the point.
+
+contract:
+  point_value: 20              # NQ. Change to 2 for MNQ.
+  commission_per_round_turn: 0 # set to your broker's real round-turn cost
+
+risk:
+  max_trades_per_day: 2
+  duplicate_window_seconds: 60
+  max_daily_loss: null         # e.g. 400 -- MUST be set below the firm's daily limit
+  max_trailing_drawdown: null  # e.g. 1500 -- MUST be set below the firm's trailing limit
+
+feed:
+  max_reconnect_attempts: 5
+  initial_backoff_seconds: 1.0
+  max_backoff_seconds: 60.0
+
+router:
+  partial_fan: alert_only      # louder than paper: tell someone when a leg fails
+
 executors:
   - name: signaltradeapp
     type: webhook

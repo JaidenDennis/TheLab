@@ -5,6 +5,10 @@ session:
   timezone: America/New_York
   open: "09:30"
   cutoff: "16:30"
+contract:
+  point_value: 20            # NQ = $20/point. MNQ is 2 -- change this before reading any P&L.
+  tick_size: 0.25
+  commission_per_round_turn: 0   # broker-specific; zero here means "not modelled", not "free"
 context:
   history_bars: 500
 risk:
