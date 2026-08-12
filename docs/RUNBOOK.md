@@ -161,13 +161,58 @@ Events: `session_start`, `session_resumed`, `session_end`, `bar_gap`,
 
 ---
 
+## Reconciliation: agent belief vs broker truth
+
+`PositionTracker` is a simulation — it opens a position because a signal was
+*dispatched*, not because a fill was *confirmed*. Reconciliation is what closes
+that gap. It is **opt-in**: without a `PositionSource` wired, nothing changes
+and every replay and backtest behaves as before.
+
+It runs at three moments:
+
+| Trigger | Why |
+|---|---|
+| Startup, on a resumed session | The agent just restored a belief from its own database and has not checked it |
+| Any `UNKNOWN` order outcome | The belief may have diverged in the last second |
+| Every N bars (`risk.reconcile_interval_bars`, 0 = off) | Catches a broker-side stop or margin close the agent never saw |
+
+What it does with the answer:
+
+| Situation | Response |
+|---|---|
+| Agreement | Journal `reconciliation_ok`, carry on |
+| Different fill price | Adopt the broker's price so P&L is measured against what was really paid. Not blocking — slippage is expected |
+| Broker flat, agent holds | Drop the phantom, block entries, alert |
+| Broker holds, agent flat | **Adopt it** so the cutoff flatten can close it, block entries, alert |
+| Quantity or direction mismatch | Block entries, alert. No guessing |
+| Query failed | Block entries. Not knowing carries the same risk as knowing it is wrong |
+
+Blocking means `RECONCILIATION_REQUIRED` vetoes new **entries**. FLATTEN always
+goes through, same rule as the kill switch. The block clears only when a later
+pass actually agrees — never on a timer.
+
+An adopted position carries **no stop and no target**, because the broker
+reports what is held, never what the exit was meant to be. It cannot be stopped
+out; the cutoff flatten is what closes it. That is deliberate — a fabricated
+stop would exit at a price nobody chose.
+
+**To wire it up**, implement `PositionSource.fetch_positions()` against your
+broker's position endpoint and pass it to `run_from_config`. `StaticPositionSource`
+exists for tests. This is the last vendor-specific piece, alongside
+`_build_payload`.
+
+---
+
 ## Incident: an order came back UNKNOWN
 
 `outcome: "UNKNOWN"` means the agent does not know whether the broker filled
 it. A timeout, a 5xx, or a connection reset mid-POST all produce this. It is
 **not** a rejection.
 
-**Do not let the agent keep trading that account until you have reconciled it.**
+If a `PositionSource` is wired, the agent has already blocked its own entries
+and attempted a check — look for `reconciliation_divergence` in the journal.
+If one is not wired, **do not let the agent keep trading that account until you
+have reconciled it by hand.**
 
 1. Open the broker's platform and read the actual position.
 2. Compare against `var/state.db` — the agent's belief:
@@ -248,8 +293,9 @@ wait for the next one.
 
 Listed so nothing here is a surprise later.
 
-- **No fill reconciliation.** The agent's position is simulated from its own
-  signals, never confirmed against the broker.
+- **Reconciliation has no broker adapter.** The layer is built and tested, but
+  `PositionSource` needs an implementation against your broker's position
+  endpoint before it does anything live.
 - **No unrealised-P&L risk.** Limits act on closed trades only.
 - **Contract roll.** `NQ.c.0` is volume-based continuous, so the roll happens
   mid-session. Do not hold a position through one.

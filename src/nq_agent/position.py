@@ -66,6 +66,17 @@ class PositionTracker:
         if position is None or bar.symbol != position.symbol:
             return None
 
+        if not position.is_managed:
+            # Adopted from the broker during reconciliation: real, but with
+            # no stop or target, because the broker reports what is held and
+            # never what the exit was meant to be. There is nothing to test a
+            # bar against. It stays open until the cutoff flatten closes it,
+            # which is the whole reason adoption exists -- an unmanaged
+            # position that nothing tracks runs overnight.
+            return None
+
+        assert position.stop_price is not None
+        assert position.target_price is not None
         if position.direction is Direction.LONG:
             stop_hit = bar.low <= position.stop_price
             target_hit = bar.high >= position.target_price

@@ -74,6 +74,11 @@ class RiskConfig(BaseModel):
     # account, so live.yaml sets them.
     max_daily_loss: Decimal | None = None
     max_trailing_drawdown: Decimal | None = None
+    # Reconcile against the broker every N bars, on top of the startup and
+    # post-UNKNOWN passes which always run when a position source is wired.
+    # 0 disables the interval pass. It costs an API call each time and is the
+    # only thing that catches a broker-side stop fill the agent never saw.
+    reconcile_interval_bars: int = 0
 
 
 class RouterConfig(BaseModel):

@@ -40,6 +40,25 @@ class RiskManager:
         self._daily_pnl = Decimal("0")
         self._equity = Decimal("0")
         self._high_water = Decimal("0")
+        self._reconciliation_detail: str | None = None
+
+    def require_reconciliation(self, detail: str) -> None:
+        """Block new entries until the agent and the broker agree again.
+
+        Set when a dispatch comes back UNKNOWN, or when a reconciliation pass
+        finds a structural divergence. Trading on top of a position you are
+        not sure you hold turns one unknown into two.
+        """
+        self._reconciliation_detail = detail
+
+    def clear_reconciliation(self) -> None:
+        """Called only when a reconciliation pass actually agrees. Never on a
+        timer, and never because the operator waited a while."""
+        self._reconciliation_detail = None
+
+    @property
+    def reconciliation_required(self) -> bool:
+        return self._reconciliation_detail is not None
 
     def record_realised_pnl(self, amount: Decimal) -> None:
         """Book a closed trade's result, in account currency.
@@ -125,6 +144,13 @@ class RiskManager:
 
         if self._kill_switch_path.exists():
             return veto(VetoReason.KILL_SWITCH, f"halt file present at {self._kill_switch_path}")
+
+        # Immediately after the kill switch and ahead of everything else: if
+        # the agent does not know what it holds, no other check is meaningful.
+        # Position size, trade count and P&L are all computed from a belief
+        # that is currently in doubt.
+        if self._reconciliation_detail is not None:
+            return veto(VetoReason.RECONCILIATION_REQUIRED, self._reconciliation_detail)
 
         if not self._calendar.is_session_open(signal.timestamp):
             if self._calendar.is_before_cutoff(signal.timestamp):

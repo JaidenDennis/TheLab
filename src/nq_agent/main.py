@@ -12,7 +12,7 @@ from pathlib import Path
 from nq_agent.clock import Clock, RealClock, SessionCalendar, SimClock
 from nq_agent.config import Settings, load_settings
 from nq_agent.context import Context
-from nq_agent.execution.base import Executor
+from nq_agent.execution.base import Executor, NotifyExecutor
 from nq_agent.execution.dryrun import DryRunExecutor, DryRunNotifier
 from nq_agent.feed.base import DataFeed
 from nq_agent.feed.replay import ReplayFeed
@@ -20,6 +20,7 @@ from nq_agent.journal import Journal
 from nq_agent.models import (
     Bar,
     Direction,
+    DivergenceKind,
     Position,
     PositionClose,
     SessionState,
@@ -27,6 +28,7 @@ from nq_agent.models import (
     SignalIntent,
 )
 from nq_agent.position import PositionTracker
+from nq_agent.reconcile import PositionSource, Reconciler
 from nq_agent.risk.accounts import AccountRegistry
 from nq_agent.risk.limits import RiskManager
 from nq_agent.router import Router
@@ -193,6 +195,9 @@ class Engine:
         is_halted: bool = False,
         resumed_session_date: date | None = None,
         max_bars: int | None = None,
+        position_source: PositionSource | None = None,
+        reconciler: Reconciler | None = None,
+        reconcile_interval_bars: int = 0,
     ) -> None:
         self.settings = settings
         self.strategy = strategy
@@ -234,6 +239,15 @@ class Engine:
         )
         self._context = Context(clock, calendar, settings.context.history_bars)
         self._last_bar_time: datetime | None = None
+        self._clock = clock
+        # Reconciliation is opt-in: without a position source there is
+        # nothing to ask, and every existing replay and backtest runs exactly
+        # as before. When one is wired, the broker becomes the source of
+        # truth for what is held.
+        self._position_source = position_source
+        self._reconciler = reconciler
+        self._reconcile_interval = reconcile_interval_bars
+        self._resumed_session_date = resumed_session_date
 
     async def _persist(self) -> None:
         session_date = self._session.current_session_date
@@ -250,6 +264,103 @@ class Engine:
                 risk_state=self._risk.snapshot(),
             )
         )
+
+    async def reconcile(self, session_date: date, trigger: str) -> bool:
+        """Ask the broker what it holds and act on the answer.
+
+        Returns True when the agent and the broker agree. The three triggers
+        that matter are startup (the agent has just restored a belief it has
+        not checked), an UNKNOWN dispatch (the belief may have just diverged),
+        and an interval (a broker-side stop fill the agent cannot see).
+
+        A fetch that fails is itself a reason to stop trading: not knowing
+        the answer is the same risk as knowing it is wrong.
+        """
+        if self._position_source is None or self._reconciler is None:
+            return True
+
+        try:
+            broker_positions = await self._position_source.fetch_positions()
+        except Exception as exc:  # noqa: BLE001 - a failed query blocks, never crashes
+            logger.exception("could not fetch broker positions")
+            detail = f"broker position query failed: {type(exc).__name__}: {exc}"
+            self._risk.require_reconciliation(detail)
+            await self._journal.write(
+                "reconciliation_failed", session_date, trigger=trigger, error=detail
+            )
+            return False
+
+        report = self._reconciler.reconcile(
+            self._tracker.position, broker_positions, at=self._clock.now()
+        )
+
+        if not report.is_blocking:
+            # Slippage only, or full agreement. Adopt the broker's fill price
+            # so P&L -- and therefore every money limit -- is measured against
+            # what was actually paid rather than what the strategy asked for.
+            price = report.consensus_price
+            current = self._tracker.position
+            if price is not None and current is not None and current.entry_price != price:
+                self._tracker.restore(current.model_copy(update={"entry_price": price}))
+                await self._journal.write(
+                    "reconciliation_adjusted",
+                    session_date,
+                    trigger=trigger,
+                    agent_price=current.entry_price,
+                    broker_price=price,
+                )
+            self._risk.clear_reconciliation()
+            await self._journal.write("reconciliation_ok", session_date, trigger=trigger)
+            return True
+
+        summary = report.summary()
+        self._risk.require_reconciliation(summary)
+        await self._journal.write(
+            "reconciliation_divergence",
+            session_date,
+            trigger=trigger,
+            detail=summary,
+            accounts=report.blocking_accounts,
+        )
+
+        adopted = report.adoptable_position
+        if adopted is not None:
+            # The broker holds something the agent did not know about. Take
+            # ownership so the cutoff flatten can close it -- otherwise
+            # nothing believes it exists and it runs overnight. Adoption is
+            # not approval: entries stay blocked, and the adopted position
+            # has no stop or target because none is known.
+            self._tracker.restore(adopted)
+            await self._journal.write(
+                "reconciliation_adopted",
+                session_date,
+                direction=adopted.direction,
+                quantity=adopted.quantity,
+                entry_price=adopted.entry_price,
+            )
+        elif self._tracker.position is not None and all(
+            d.kind is DivergenceKind.AGENT_ONLY for d in report.divergences
+        ):
+            # Every account says flat and the agent thinks otherwise. Drop the
+            # phantom rather than keep flattening something that is not there.
+            await self._journal.write(
+                "reconciliation_dropped_phantom",
+                session_date,
+                direction=self._tracker.position.direction,
+                quantity=self._tracker.position.quantity,
+            )
+            self._tracker.restore(None)
+
+        await self._alert(f"reconciliation divergence: {summary}")
+        return False
+
+    async def _alert(self, message: str) -> None:
+        for executor in self.router.enabled:
+            if isinstance(executor, NotifyExecutor):
+                try:
+                    await executor.alert(message)
+                except Exception:  # noqa: BLE001 - an alert never breaks the run
+                    logger.exception("alert failed on %s", executor.name)
 
     def _realised_pnl(self, closed: PositionClose) -> Decimal:
         """What that trade actually did to the account, in currency.
@@ -343,8 +454,17 @@ class Engine:
                 reason=signal.reason,
             )
 
-        await self.router.dispatch(signal, session_date)
+        results = await self.router.dispatch(signal, session_date)
         self._risk.record_accepted(signal)
+
+        # An UNKNOWN leg means the agent's belief about this order may already
+        # be wrong. Ask the broker before anything else is sent.
+        if any(result.needs_reconciliation for result in results):
+            unknown = [r.executor_name for r in results if r.needs_reconciliation]
+            self._risk.require_reconciliation(
+                f"order {signal.id} returned UNKNOWN on {', '.join(unknown)}"
+            )
+            await self.reconcile(session_date, trigger="unknown_order")
 
         if signal.intent is SignalIntent.ENTRY:
             opened = self._tracker.on_signal(signal)
@@ -447,6 +567,13 @@ class Engine:
             if not await executor.health_check():
                 logger.warning("health check failed for %s", executor.name)
 
+        # Before the first bar: the agent has just restored a belief about
+        # what it holds from its own database and has not checked it against
+        # anything. If the crash happened mid-dispatch, that belief is
+        # exactly what is most likely to be wrong.
+        if self._position_source is not None and self._resumed_session_date is not None:
+            await self.reconcile(self._resumed_session_date, trigger="startup")
+
         try:
             await self._bar_loop()
         except Exception as exc:
@@ -472,6 +599,7 @@ class Engine:
     async def _bar_loop(self) -> None:
         processed = 0
         skipped = 0
+        since_reconcile = 0
         async for bar in self.feed.stream(
             self.settings.symbol, self.settings.timeframes, self._resume_from
         ):
@@ -534,6 +662,14 @@ class Engine:
 
             if not warmup:
                 await self._persist()
+                # Interval reconciliation catches what nothing else can: a
+                # broker-side stop or margin close the agent never saw. Off
+                # by default (0) because it costs an API call per interval
+                # and means nothing without a position source.
+                since_reconcile += 1
+                if self._reconcile_interval and since_reconcile >= self._reconcile_interval:
+                    since_reconcile = 0
+                    await self.reconcile(session_date, trigger="interval")
 
             processed += 1
             if self._max_bars is not None and processed >= self._max_bars:
@@ -543,6 +679,28 @@ class Engine:
             session_date = self._session.current_session_date
             if session_date is not None:
                 await self._journal.write("backfill_skipped", session_date, count=skipped)
+
+
+def order_accounts(settings: Settings) -> list[str]:
+    """Accounts that actually receive orders, in config order.
+
+    Derived from the executors rather than from AccountRegistry: the registry
+    is an enable/disable overlay that answers "may this account trade right
+    now", and an account switched off mid-session still holds whatever it
+    already had. Reconciliation has to check those too -- an account disabled
+    while holding a position is precisely the one nobody is watching.
+
+    Notify entries contribute nothing: a human being told about a signal is
+    not an account with a position in it.
+    """
+    accounts: list[str] = []
+    for entry in settings.executors:
+        if entry.type == "notify":
+            continue
+        for account in entry.accounts:
+            if account not in accounts:
+                accounts.append(account)
+    return accounts
 
 
 def check_timeframes(strategy: Strategy, settings: Settings) -> None:
@@ -606,6 +764,7 @@ async def run_from_config(
     strategy_override: Strategy | None = None,
     backfill_until: datetime | None = None,
     binding: FeedBinding | None = None,
+    position_source: PositionSource | None = None,
 ) -> Engine:
     """Load config, restore prior state if any, and run one session.
 
@@ -701,6 +860,13 @@ async def run_from_config(
         is_halted=is_halted,
         resumed_session_date=resumed_session_date,
         max_bars=max_bars,
+        position_source=position_source,
+        reconciler=(
+            Reconciler(settings.symbol, order_accounts(settings))
+            if position_source is not None
+            else None
+        ),
+        reconcile_interval_bars=settings.risk.reconcile_interval_bars,
     )
     await engine.run()
     return engine

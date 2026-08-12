@@ -52,6 +52,7 @@ class VetoReason(str, Enum):
     SESSION_CLOSED = "SESSION_CLOSED"
     DAILY_LOSS_LIMIT = "DAILY_LOSS_LIMIT"
     TRAILING_DRAWDOWN = "TRAILING_DRAWDOWN"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
 
 
 def require_utc(value: datetime) -> datetime:
@@ -168,8 +169,69 @@ class Position(Frozen):
     quantity: int
     entry_price: Decimal
     entry_time: UtcDatetime
-    stop_price: Decimal
-    target_price: Decimal
+    # Optional because a position adopted from the broker during
+    # reconciliation has no known stop or target -- the broker reports what
+    # is held, not what the exit was meant to be. Inventing levels would put
+    # a fabricated exit into PositionTracker and stop the position out at a
+    # price nobody chose. A position without them is unmanaged: it cannot be
+    # stopped or targeted, and the cutoff flatten is what closes it.
+    stop_price: Decimal | None = None
+    target_price: Decimal | None = None
+
+    @property
+    def is_managed(self) -> bool:
+        return self.stop_price is not None and self.target_price is not None
+
+
+class BrokerPosition(Frozen):
+    """What the broker says one account actually holds.
+
+    Deliberately not a Position: it carries no stop or target because the
+    broker does not report intent, and `average_price` is what was really
+    paid rather than what the strategy asked for.
+    """
+
+    account_id: str
+    symbol: str
+    direction: Direction
+    quantity: int
+    average_price: Decimal
+
+
+class DivergenceKind(str, Enum):
+    AGREED = "AGREED"
+    # Same position, different fill price. Slippage, not a structural
+    # problem: halting on this would halt on every trade.
+    PRICE_MISMATCH = "PRICE_MISMATCH"
+    # The agent believes it holds something the broker does not have. The
+    # order never filled, or something closed it externally.
+    AGENT_ONLY = "AGENT_ONLY"
+    # The broker holds something the agent does not know about. The expensive
+    # one: nothing will flatten it at the cutoff, because nothing believes it
+    # exists, so it runs overnight.
+    BROKER_ONLY = "BROKER_ONLY"
+    QUANTITY_MISMATCH = "QUANTITY_MISMATCH"
+    DIRECTION_MISMATCH = "DIRECTION_MISMATCH"
+
+
+BLOCKING_DIVERGENCES = frozenset(
+    {
+        DivergenceKind.AGENT_ONLY,
+        DivergenceKind.BROKER_ONLY,
+        DivergenceKind.QUANTITY_MISMATCH,
+        DivergenceKind.DIRECTION_MISMATCH,
+    }
+)
+
+
+class Divergence(Frozen):
+    account_id: str
+    kind: DivergenceKind
+    detail: str = ""
+
+    @property
+    def is_blocking(self) -> bool:
+        return self.kind in BLOCKING_DIVERGENCES
 
 
 class PositionClose(Frozen):
