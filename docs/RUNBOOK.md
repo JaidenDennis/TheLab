@@ -317,9 +317,22 @@ Listed so nothing here is a surprise later.
   intra-bar spike through a limit is invisible to it.
 - **Contract roll.** `NQ.c.0` is volume-based continuous, so the roll happens
   mid-session. Do not hold a position through one.
-- **Multi-day replay resume.** A replay killed and restarted resumes the
-  fixture's *first* session, not the one it was in. Live is unaffected (its
-  anchor is `now`); backtests are unaffected (they use a fresh state dir).
-- **No second whole-branch review** since the resume-window fix wave.
 - **`DatabentoFeed` has never connected to Databento.** The SDK surface is
   verified against the installed package; the behaviour is not.
+
+Resolved since this list was written (both fixes carry mutation-tested pins):
+
+- *Multi-day replay resume* -- a replay now resumes the latest persisted
+  session (`StateStore.load_latest`), and bars from sessions before it bypass
+  SessionManager so the one-shot adoption lands on the right session. See
+  `tests/test_multiday_resume.py`.
+- *Second whole-branch review* -- ran 2026-08-12 (workflow-backed, high
+  effort) over the risk-limits change. Four correctness findings confirmed:
+  two were behaviour deliberately pinned in `test_risk_unrealised` (open
+  gains offsetting realised losses; the closed basis counting open losses
+  against the mark) and are now documented as decisions in `config.py`; two
+  were real and are fixed -- a carried position no longer charges its
+  since-entry move against a fresh session's daily limit, and the risk-breach
+  flatten is withheld (journalled as `risk_flatten_withheld`) while the
+  position belief is unreconciled, with the session cutoff flatten as the
+  deliberate backstop. Note the fixes themselves postdate that review.

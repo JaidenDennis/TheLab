@@ -72,6 +72,13 @@ class FeedBinding:
     `anchor` is the instant that identifies which session's persisted state to
     load: the fixture's first tick for a replay, `now` for a live process.
 
+    `resume_latest` says the anchor does NOT name the session to resume, and
+    the latest persisted session should be loaded instead. A replay sets it:
+    its anchor is the fixture's first tick, so a multi-day fixture killed in
+    its third session would otherwise restore the first session's completed
+    state and re-run days already traded. A live process leaves it False --
+    `now` is exactly the session it is resuming.
+
     `backfill_until` is the wall-clock moment the live stream opened, i.e. the
     far edge of the gap the process was down for. Everything between the last
     persisted bar and that moment is warmup window 2 -- replayed for real
@@ -85,6 +92,7 @@ class FeedBinding:
     clock: Clock
     anchor: datetime
     backfill_until: datetime | None = None
+    resume_latest: bool = False
 
 
 def replay_binding(replay_path: Path, symbol: str) -> FeedBinding:
@@ -92,7 +100,10 @@ def replay_binding(replay_path: Path, symbol: str) -> FeedBinding:
     anchor = ReplayFeed(replay_path, symbol).first_tick_time()
     clock = SimClock(anchor)
     return FeedBinding(
-        feed=ReplayFeed(replay_path, symbol, clock=clock), clock=clock, anchor=anchor
+        feed=ReplayFeed(replay_path, symbol, clock=clock),
+        clock=clock,
+        anchor=anchor,
+        resume_latest=True,
     )
 
 
@@ -683,9 +694,23 @@ class Engine:
                 # or position side effect of its own. Any flatten signal it
                 # returns here is for a bar already reflected in the state
                 # already restored, so it is discarded rather than handled.
-                prior_session_date = self._session.current_session_date
-                await self._session.on_bar(bar, self._tracker.position)
-                self._reset_after_rollover(prior_session_date)
+                #
+                # -- except bars from sessions BEFORE the one being resumed.
+                # A multi-day replay's skip window starts at the top of the
+                # fixture, and those sessions are wholly in the past: handing
+                # their bars to SessionManager would burn its one-shot
+                # adoption on the first old session, and each rollover on the
+                # way forward would clobber the restored trades_taken,
+                # is_halted and risk figures. The resumed session must be the
+                # first one the manager ever sees.
+                if (
+                    self._resumed_session_date is None
+                    or self._calendar.session_date_for(bar.close_time)
+                    >= self._resumed_session_date
+                ):
+                    prior_session_date = self._session.current_session_date
+                    await self._session.on_bar(bar, self._tracker.position)
+                    self._reset_after_rollover(prior_session_date)
                 processed += 1
                 if self._max_bars is not None and processed >= self._max_bars:
                     break
@@ -859,11 +884,14 @@ async def run_from_config(
     state_store = StateStore(settings.state_db_path)
     await state_store.init_schema()
 
-    # The binding's anchor, not the replay fixture's first tick: a live feed's
-    # "first tick" is whenever the process happened to start, which says
-    # nothing about which session it is resuming.
-    session_date = calendar.session_date_for(binding.anchor)
-    prior = await state_store.load(session_date)
+    # Which persisted session is being resumed. A live process resumes the
+    # session running now -- its anchor. A replay resumes wherever the killed
+    # run actually got to: its anchor is the fixture's first tick, which
+    # names the file's first session regardless of how far that run was.
+    if binding.resume_latest:
+        prior = await state_store.load_latest()
+    else:
+        prior = await state_store.load(calendar.session_date_for(binding.anchor))
 
     resume_from: datetime | None = None
     resume_position: Position | None = None

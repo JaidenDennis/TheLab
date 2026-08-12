@@ -1,48 +1,24 @@
 # NQ Agent — handoff
 
-Last updated 2026-08-12. Branch `main`, 43 commits, 385 tests passing,
-`ruff check` and `mypy --strict src/` clean on Windows + Python 3.12.
+Last updated 2026-08-12. Branch `main`, 46 commits, 392 tests passing,
+`ruff check` and `mypy --strict src/` clean. Verified on Windows and now on
+macOS (this machine), both Python 3.12.
+
+The machine migration this document was written for has happened: the repo
+is cloned here with `origin` pointing at GitHub, and the environment below
+is set up. The old bundle-based transfer instructions are gone with it —
+push/pull through the remote from here on. Local commits exist that have
+not been pushed; push when ready.
 
 ---
 
-## Getting the code onto another machine
-
-**Preferred: push to the remote.** Nothing has been pushed yet — there is no
-remote configured, and this machine has no stored GitHub credentials. From the
-repo root:
-
-```
-git remote add origin https://github.com/<user>/<repo>.git
-git push -u origin main
-```
-
-Authentication will be needed. Either install the GitHub CLI
-(`winget install GitHub.cli`, then `gh auth login`), or use a personal access
-token as the password when prompted.
-
-**Fallback with no network or no credentials:** `nq-agent-full.bundle` sits one
-directory up (`Desktop/Auto Trading/`). It is 0.25 MB and contains the complete
-43-commit history. Copy it to the new machine and:
-
-```
-git clone nq-agent-full.bundle nq-agent
-cd nq-agent
-git remote remove origin        # points at the bundle file, not a real remote
-```
-
-`nq-agent-git-history.bundle` inside the repo is the ORIGINAL scaffolding
-bundle from before this work. It is stale and redundant — its history is a
-subset of what is now in `.git`. Delete it whenever.
-
----
-
-## Setting up on the new machine
+## Setting up on a new machine
 
 ```
 git config core.autocrlf false          # see the warning below -- do this FIRST
 uv venv --python 3.12
-uv pip install -e ".[dev]"              # add ",live" for databento + aiohttp
-uv run pytest -q                        # expect 385 passing
+uv pip install -e ".[dev,live]"         # live = databento + aiohttp
+uv run pytest -q                        # expect 392 passing
 ```
 
 If `uv` is not installed: `python -m pip install uv`. Note it may land in a
@@ -83,6 +59,16 @@ this session). This session added, in order:
 7. Position reconciliation against broker truth.
 8. Unrealised P&L risk, with a protective flatten on breach.
 
+On this machine (2026-08-12), after the move:
+
+9. The second whole-branch review ran (workflow-backed, high effort) and its
+   findings were resolved — two real defects fixed (a carried position's
+   since-entry move counting against a fresh daily limit; the risk-breach
+   flatten dispatching from an unreconciled position belief), two findings
+   documented as deliberate, test-pinned decisions, five cleanups applied.
+10. Multi-day replay resume fixed: a killed replay now resumes the latest
+    persisted session, not the fixture's first.
+
 Read `docs/RUNBOOK.md` before running anything against an account. Its go-live
 checklist has the blocking items marked.
 
@@ -114,10 +100,11 @@ Both are isolated and marked in their own files:
 ## Things known to be missing
 
 See the end of `docs/RUNBOOK.md` for the full list. The ones that matter most:
-unrealised P&L is marked on bar closes rather than tick by tick; the contract
-roll happens mid-session so do not hold through one; and **no whole-branch
-review has been run since this session's changes** — the last one found three
-Critical defects behind 185 passing tests.
+unrealised P&L is marked on bar closes rather than tick by tick, and the
+contract roll happens mid-session so do not hold through one. The
+whole-branch review debt is paid (2026-08-12), though the fixes it produced
+postdate it — keep the review-before-go-live checklist item honest about
+whatever has changed since.
 
 ## A note on how this was verified
 

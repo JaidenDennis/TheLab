@@ -60,6 +60,14 @@ class StateStore:
             ).fetchone()
         return str(row[0]) if row else None
 
+    def _load_latest_sync(self) -> str | None:
+        # session_date is ISO text, so lexicographic DESC is chronological.
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT payload FROM session_state ORDER BY session_date DESC LIMIT 1"
+            ).fetchone()
+        return str(row[0]) if row else None
+
     async def init_schema(self) -> None:
         await asyncio.to_thread(self._init_sync)
 
@@ -70,6 +78,19 @@ class StateStore:
 
     async def load(self, session_date: date) -> SessionState | None:
         payload = await asyncio.to_thread(self._load_sync, session_date.isoformat())
+        if payload is None:
+            return None
+        return SessionState.model_validate_json(payload)
+
+    async def load_latest(self) -> SessionState | None:
+        """The most recently persisted session, whatever its date.
+
+        A replay resumes from here: its anchor is the fixture's first tick,
+        which names the file's FIRST session no matter how far a killed run
+        had actually got. A live process never uses this -- its anchor is
+        `now`, which correctly names the session being resumed.
+        """
+        payload = await asyncio.to_thread(self._load_latest_sync)
         if payload is None:
             return None
         return SessionState.model_validate_json(payload)
