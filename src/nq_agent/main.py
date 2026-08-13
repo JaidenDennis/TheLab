@@ -35,6 +35,7 @@ from nq_agent.session import SessionManager, build_protective_flatten, write_sig
 from nq_agent.state import StateStore
 from nq_agent.strategy.always import AlwaysStrategy
 from nq_agent.strategy.base import Strategy
+from nq_agent.strategy.naim import NoiseAreaIntradayMomentum
 from nq_agent.strategy.orb import OpeningRangeBreakout
 from nq_agent.strategy.sme import SessionMomentumExpansion
 from nq_agent.strategy.stub import StubStrategy
@@ -51,6 +52,10 @@ STRATEGIES: dict[str, type[Strategy]] = {
     # deviations (see sme.py's module docstring); NOT yet validated -- the
     # walk-forward protocol in the spec gates any live use.
     "sme": SessionMomentumExpansion,
+    # Noise-area intraday momentum (spec NAIM v1.0). Needs precomputed noise
+    # curves to trade anything -- without them every day is a no-trade day --
+    # so production use goes through the runner that loads them.
+    "naim": NoiseAreaIntradayMomentum,
 }
 
 
