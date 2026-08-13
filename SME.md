@@ -1,14 +1,17 @@
-# SME — Session-Momentum Expansion: Develop-Window Results
+# SME — Session-Momentum Expansion: Final Report
 
-**Status: one configuration passes the pre-registered develop gate. The
-holdout has NOT been touched. Nothing here is validated for live use.**
+**Status: DEAD, holdout-confirmed (2026-08-13). The best develop-window
+configuration (+$86.27/trade) went to −$7.66/trade, PF 1.00, on the sealed
+holdout — zero edge after costs. The protocol worked: the strategy was
+killed by data before it touched money. See §8a. Do not re-litigate from
+memory; re-run the commands in §9 instead.**
 
 | | |
 |---|---|
 | Strategy | SME v1 (`src/nq_agent/strategy/sme.py`), spec v1.0 |
 | Data | NQ.v.0 (volume-rolled continuous), Databento GLBX.MDP3, 1m OHLCV pseudo-tick fixtures, extended window (00:00–16:31 ET) |
 | Develop window | 2021-01-04 → 2024-09-30, 969 sessions |
-| **Holdout (sealed)** | **2024-10-01 → 2026-08-12 — untouched, to be read exactly once** |
+| Holdout | 2024-10-01 → 2026-08-12, ~470 sessions — **read exactly once, on 2026-08-13 (see §8a)** |
 | Sizing | 1 NQ contract flat ($20/pt). All dollar figures are per-contract; divide by 10 for MNQ |
 | Costs | $10/contract round turn **plus** a modeled 1-tick adverse fill on every stop-market entry (≈$5 of slippage double-counted — the model is deliberately conservative) |
 | Engine | The production engine (same fill model, risk layer, journal); backtests replay through it, no separate simulator |
@@ -28,15 +31,15 @@ holdout has NOT been touched. Nothing here is validated for live use.**
   exits — +$86.27/trade, PF 1.19, positive in all four years, and
   *improving* over time** (the opposite of the crowding-decay signature that
   killed the ungated variants).
-- That cell **passes the pre-registered develop gate** (EV ≥ $40/trade, ≥3
-  of 4 years positive). Per protocol, the next and only next step is a
-  single read of the sealed holdout. **Expect degradation there**: this cell
-  was selected as the best of five examined variants, and selection inflates
-  develop-set results even when each variant was spec-motivated.
-- Economics if (and only if) the holdout holds: ≈12.8 trades/month at
-  +$86/trade ≈ **$1,100/month per NQ contract ≈ $110/month per MNQ micro**,
-  with a closed-trade max drawdown of ≈$2,080 per micro against a typical
-  $4,500-class trailing limit. Viable at 1–2 micros; thin but real.
+- That cell passed the pre-registered develop gate (EV ≥ $40/trade, ≥3 of 4
+  years positive) — and then **failed the holdout**: −$7.66/trade, PF 1.00
+  over 209 trades (§8a). The predicted selection-effect degradation arrived
+  in full: the out-of-sample edge is zero gross of costs and slightly
+  negative net of them.
+- **Final verdict: SME v1 is dead as specified.** What survives it: the
+  measured value of the context layer and the OFI gate as components, the
+  exit-design lesson (§4), the full pipeline, and one data-generated lead
+  (§8b).
 
 ---
 
@@ -187,27 +190,61 @@ no dates were supplied, so §3.4 of the spec was effectively OFF in all runs.
 
 ---
 
-## 8. Protocol state and the committed next step
+## 8. Protocol state
 
 Pre-registered gate (set before the winning cell was read):
 **EV ≥ +$40/trade and ≥3 of 4 develop years positive.**
 
-- A+B+C-hold: **PASSES** (+$86.27, 4/4 years).
-- Selection caveat: best-of-five on the develop window. The honest prior is
-  that holdout EV lands well below +$86.
+- A+B+C-hold: passed on develop (+$86.27, 4/4 years), with the recorded
+  caveat that best-of-five selection inflates develop results and the
+  holdout would land lower. It did — all the way to zero.
 
-**Committed next step, per protocol: run A+B+C-hold (exact current
-parameters, no changes) on the sealed holdout, 2024-10-01 → 2026-08-12,
-exactly once.** Survives → shadow mode per RUNBOOK. Fails → the strategy is
-dead as specified; layers A and C remain validated components for the next
-thesis.
+## 8a. The holdout read (one shot, 2026-08-13)
 
-The user has separately judged the return profile (~$110/month per micro)
-too thin to pursue; that is a portfolio decision, not a data one. This
-report records what the data showed either way. If SME is shelved without
-the holdout read, the holdout stays sealed and reusable.
+A+B+C-hold, exact develop parameters, seeded walk-forward with develop-era
+trailing state (what a live process crossing 2024-10-01 would have held),
+run once over 2024-10-01 → 2026-08-12:
 
-### Candidate next theses (in evidence order)
+| | develop | holdout |
+|---|---|---|
+| Trades | 578 | 209 |
+| Net | +$49,861 | **−$1,602** |
+| EV/trade | +$86.27 | **−$7.66** |
+| Win rate | 27.9% | 29.2% |
+| Profit factor | 1.19 | **1.00** |
+| Avg win / avg loss | $2,161 / −$715 | $1,945 / −$813 |
+| Max drawdown | 1,041 pts | 1,226 pts |
+
+Gross of the $10 commission the holdout EV is ≈ +$2/trade: the strategy
+found exactly nothing out of sample, and costs decide the sign.
+
+Post-mortem (descriptive only — the holdout is spent and none of these
+slices may be used to select a v2):
+
+- The develop-era strength persisted ~one quarter past the boundary
+  (Q4-2024: +$268/trade, n=33), then 2025 — the bulk of the holdout —
+  went −$101/trade (n=121). 2026 (n=55): +$31.
+- The short side collapsed back to −$132/trade, erasing the develop-set
+  appearance that the gate had "rescued" shorts. Longs stayed positive
+  (+$96/trade, n=114) — but a long-only rescue would be a new hypothesis
+  taken FROM the holdout, which is exactly the self-deception the one-read
+  rule exists to prevent. If a long-only variant is ever wanted, it needs
+  its own fresh out-of-sample period (which does not exist yet — it accrues
+  with time).
+
+**Verdict: dead as specified.** The trade geometry survived (3:1 winners,
+~28% win rate — the machine works as designed); the *selectivity* did not.
+The gate stopped finding trades whose tails paid.
+
+### What this cost and bought
+
+Cost: ~$0 of data (all pulls inside the plan), three sessions of work, no
+capital risked. Bought: two engine bugs found and fixed, a validated
+pipeline that takes a spec to a holdout verdict in under a day, measured
+component values for layers A and C, and the negative result recorded here
+so it never has to be paid for twice.
+
+## 8b. Candidate next theses (in evidence order)
 
 1. **Failed-breakout fade**: 72% of ungated triggers stop out; the fade
    side of the exact same levels has been collecting what SME paid,
