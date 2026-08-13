@@ -60,9 +60,11 @@ def build_variants(decisions_dir: Path) -> dict[str, partial[TickFlowRegime]]:
         "exit_ri": base(exit_mode="ri"),
         "exit_stack": base(exit_mode="stack"),
         "exit_t13": base(exit_mode="t13"),
-        # 3. regime layer off: flow-threshold entries only (p_arm=0 never
-        #    blocks; regime requirement bypassed via vol gate retained)
-        "no_regime": base(exit_mode="stack", p_arm=0.0, vol_z_min=0.5),
+        # 3. regime layer off: flow-threshold entries only, vol gate retained.
+        #    (First build of this cell only lowered p_arm and still required
+        #    the AF label -- it measured nothing. regime_required=False is
+        #    the actual control.)
+        "no_regime": base(exit_mode="stack", regime_required=False),
         # 4/5. threshold sweeps on the stack
         "stack_parm45": base(exit_mode="stack", p_arm=0.45),
         "stack_parm75": base(exit_mode="stack", p_arm=0.75),

@@ -87,6 +87,7 @@ class TickFlowRegime(Strategy):
         quantity: int = 1,
         tick_size: Decimal = Decimal("0.25"),
         fomc_dates: set[date] | None = None,
+        regime_required: bool = True,
     ) -> None:
         if exit_mode not in EXIT_MODES:
             raise ValueError(f"exit_mode must be one of {EXIT_MODES}, got {exit_mode!r}")
@@ -108,6 +109,10 @@ class TickFlowRegime(Strategy):
         self._quantity = quantity
         self._tick = tick_size
         self._fomc_dates = fomc_dates or set()
+        # False = the spec 10.3 control: flow-threshold entries with the
+        # regime layer bypassed entirely, so the layer's contribution is
+        # measured rather than assumed.
+        self._regime_required = regime_required
         self._reset_day()
 
     # ------------------------------------------------------------------ day
@@ -271,11 +276,12 @@ class TickFlowRegime(Strategy):
     # ----------------------------------------------------------------- entry
 
     def _entry_direction(self, record: dict[str, Any]) -> str | None:
-        if record.get("regime") != "AF":
-            return None
-        t_af = record.get("t_af")
-        if t_af is None or t_af < self._p_arm:
-            return None
+        if self._regime_required:
+            if record.get("regime") != "AF":
+                return None
+            t_af = record.get("t_af")
+            if t_af is None or t_af < self._p_arm:
+                return None
         z_vol = record.get("z_vol")
         if z_vol is None or z_vol < self._vol_z_min:
             return None
