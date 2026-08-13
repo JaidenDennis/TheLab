@@ -71,7 +71,10 @@ def load_key(env_path: Path) -> str:
 
 
 def window_bounds(session: date, window: str) -> tuple[datetime, datetime]:
-    start_local = time(9, 30) if window == "rth" else time(0, 0)
+    # rth15 starts 09:15 so trailing 15-minute flow windows are complete
+    # from the first tradable bar.
+    starts = {"rth": time(9, 30), "rth15": time(9, 15), "extended": time(0, 0)}
+    start_local = starts[window]
     start = datetime.combine(session, start_local, tzinfo=ET).astimezone(timezone.utc)
     end = datetime.combine(session, SESSION_END, tzinfo=ET).astimezone(timezone.utc)
     return start, end
@@ -152,7 +155,15 @@ def main() -> None:
     parser.add_argument("--start", type=date.fromisoformat, required=True)
     parser.add_argument("--end", type=date.fromisoformat, required=True)
     parser.add_argument("--schema", choices=["trades", "ohlcv-1m", "ohlcv-1s"], default="trades")
-    parser.add_argument("--window", choices=["rth", "extended"], default="rth")
+    parser.add_argument("--window", choices=["rth", "rth15", "extended"], default="rth")
+    parser.add_argument(
+        "--chunk-days",
+        type=int,
+        default=None,
+        help="request-chunk size in days; default 7 for trades, 31 for bars. Use 1 "
+        "for billed pulls: a chunk spanning nights and weekends bills the span, "
+        "not the sessions kept from it",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--symbol", default="NQ.v.0", help="volume-rolled continuous front month")
     parser.add_argument("--quote", action="store_true", help="print cost and size, pull nothing")
@@ -163,7 +174,7 @@ def main() -> None:
     days = sessions_between(args.start, args.end)
     if not days:
         raise SystemExit("no weekdays in range")
-    chunk_days = 7 if args.schema == "trades" else 31
+    chunk_days = args.chunk_days or (7 if args.schema == "trades" else 31)
     grouped = chunks(days, chunk_days)
 
     if args.quote:

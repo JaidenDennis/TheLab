@@ -20,6 +20,13 @@ live = [
     "databento>=0.83",
     "aiohttp>=3.9",
 ]
+# Research tooling only (GMM fitting for TFR's regime layer). Scripts-side:
+# the strategy runtime evaluates persisted model parameters with the stdlib,
+# so nothing in src/ imports from here.
+research = [
+    "scikit-learn>=1.4",
+    "numpy>=1.26",
+]
 dev = [
     "aiohttp>=3.9",
     "pytest>=8.2",

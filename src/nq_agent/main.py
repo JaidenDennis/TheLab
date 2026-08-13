@@ -39,6 +39,7 @@ from nq_agent.strategy.naim import NoiseAreaIntradayMomentum
 from nq_agent.strategy.orb import OpeningRangeBreakout
 from nq_agent.strategy.sme import SessionMomentumExpansion
 from nq_agent.strategy.stub import StubStrategy
+from nq_agent.strategy.tfr import TickFlowRegime
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ STRATEGIES: dict[str, type[Strategy]] = {
     # curves to trade anything -- without them every day is a no-trade day --
     # so production use goes through the runner that loads them.
     "naim": NoiseAreaIntradayMomentum,
+    # Tick-Flow Regime (spec TFR v1.0). Needs precomputed decision files
+    # (precompute_flow -> fit_regimes); without them every day stands down.
+    "tfr": TickFlowRegime,
 }
 
 
