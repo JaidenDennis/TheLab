@@ -15,7 +15,7 @@ from nq_agent.clock import SessionCalendar, SimClock
 from nq_agent.context import Context
 from nq_agent.models import Bar, Direction, Signal, SignalIntent
 from nq_agent.position import PositionTracker
-from nq_agent.strategy.tfr import ACTIVE, DONE, IN_TRADE, TickFlowRegime
+from nq_agent.strategy.tfr import DONE, IN_TRADE, TickFlowRegime
 
 OPEN = datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc)
 SESSION = date(2026, 7, 15)
