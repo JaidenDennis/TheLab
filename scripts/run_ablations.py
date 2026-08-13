@@ -74,7 +74,7 @@ def fixtures_between(fixtures_dir: Path, start: date, end: date) -> list[Path]:
 
 def summarise(name: str, report: BacktestReport) -> dict[str, object]:
     trades = len(report.trades)
-    net = report.net_dollars
+    net = report.net_dollars.quantize(Decimal("0.01"))
     return {
         "variant": name,
         "trades": trades,
@@ -87,7 +87,7 @@ def summarise(name: str, report: BacktestReport) -> dict[str, object]:
             if report.profit_factor is None
             else str(report.profit_factor.quantize(Decimal("0.01")))
         ),
-        "max_drawdown_points": str(report.max_drawdown_points),
+        "max_drawdown_points": str(report.max_drawdown_points.quantize(Decimal("0.01"))),
         "by_exit": report.by_exit_reason,
     }
 
