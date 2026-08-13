@@ -30,10 +30,32 @@ from pathlib import Path
 from nq_agent.backtest import BacktestReport, run_backtest
 from nq_agent.strategy.sme import SessionMomentumExpansion
 
+
+class HoldToClose(SessionMomentumExpansion):
+    """A+B with the exit stack reduced to the initial stop and the 15:55
+    flatten -- no break-even move, no trail. Exists because the trade replay
+    said the v1 exits were amputating the tail; this makes the engine, not a
+    replay script, the judge of that claim."""
+
+    def _enter(self, bar: object, direction: str, trigger: object) -> object:
+        signal = super()._enter(bar, direction, trigger)  # type: ignore[arg-type]
+        if signal is not None:
+            # be_done=True skips the break-even move forever; with _trail a
+            # no-op below, the virtual stop never tightens past the real one
+            # and the tracker's initial stop is the only stop.
+            self._be_done = True
+        return signal
+
+    def _trail(self, five_min_bar: object) -> None:
+        return None
+
+
 VARIANTS: dict[str, partial[SessionMomentumExpansion]] = {
     "b_alone": partial(SessionMomentumExpansion, layer_a=False, ofi_mode="off"),
     "a_b": partial(SessionMomentumExpansion, ofi_mode="off"),
     "a_b_c_proxy": partial(SessionMomentumExpansion, ofi_mode="proxy"),
+    "a_b_hold": partial(HoldToClose, ofi_mode="off"),
+    "a_b_c_hold": partial(HoldToClose, ofi_mode="proxy"),
 }
 
 
