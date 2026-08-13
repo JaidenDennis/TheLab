@@ -125,6 +125,74 @@ async def test_a_multiday_replay_resumes_the_session_it_was_killed_in(
     assert [e["exit_reason"] for e in closes].count("FLATTEN") == 1
 
 
+async def test_resuming_into_a_new_session_starts_fresh_day_counters(
+    tmp_path: Path,
+) -> None:
+    """Each fixture after the first in a multi-fixture backtest resumes the
+    previous session's state on a NEW day. Yesterday's trades_taken, halt
+    flag and daily loss must not gate today: one halted day would silently
+    poison every later day of the backtest."""
+
+    def tick(day: str, hhmmss: str, price: str) -> str:
+        return json.dumps({"ts": f"2026-07-{day}T{hhmmss}+00:00", "price": price, "size": 1})
+
+    # Day one: enter long at 20000, decline through the $20 daily limit so
+    # the risk flatten fires and halts the day, then close past the cutoff.
+    day_one = tmp_path / "day1.jsonl"
+    day_one.write_text(
+        "\n".join(
+            [
+                tick("15", "13:30:30", "20000.00"),
+                tick("15", "13:31:30", "20000.00"),
+                tick("15", "13:32:30", "19998.00"),  # -$40, past the limit
+                tick("15", "13:33:30", "19998.00"),
+                tick("15", "20:30:30", "19998.00"),
+                tick("15", "20:31:30", "19998.00"),
+            ]
+        )
+        + "\n"
+    )
+    # Day two: a clean session with an entry on the first bar.
+    day_two = tmp_path / "day2.jsonl"
+    day_two.write_text(
+        "\n".join(
+            [
+                tick("16", "13:30:30", "20000.00"),
+                tick("16", "13:31:30", "20000.00"),
+                tick("16", "13:32:30", "20001.00"),
+                tick("16", "20:30:30", "20001.00"),
+                tick("16", "20:31:30", "20001.00"),
+            ]
+        )
+        + "\n"
+    )
+    config = tmp_path / "fresh.yaml"
+    config.write_text(
+        f"data_dir: {tmp_path.as_posix()}\n"
+        "timeframes: [1m, 5m]\n"
+        "risk:\n"
+        "  max_trades_per_day: 10\n"
+        "  duplicate_window_seconds: 0\n"
+        "  max_daily_loss: 20\n"
+        "executors:\n"
+        "  - name: dryrun_broker\n"
+        "    type: dryrun\n"
+        "    enabled: true\n"
+        "    accounts: [tradeify]\n"
+    )
+
+    first = await run_from_config(config, day_one, "always", None)
+    assert first.is_halted, "day one must end halted for this test to mean anything"
+    assert first.trades_taken == 1
+
+    second = await run_from_config(config, day_two, "always", None)
+
+    assert second.trades_taken == 1, "yesterday's trade count leaked into today"
+    assert not second.is_halted, "yesterday's halt leaked into today"
+    opened = [e for e in day_events(tmp_path, DAY_TWO) if e["event"] == "position_opened"]
+    assert opened, "day two never traded -- yesterday's state gated it"
+
+
 async def test_a_completed_multiday_replay_rerun_replays_nothing(tmp_path: Path) -> None:
     """Running the fixture to completion and then again must not re-dispatch
     anything: the latest persisted state already reflects the final bar, so

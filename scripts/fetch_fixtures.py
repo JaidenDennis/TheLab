@@ -133,11 +133,11 @@ def ohlcv_lines(record: object) -> list[tuple[int, str]]:
     carry the true bar volume."""
     o = record.open  # type: ignore[attr-defined]
     h = record.high  # type: ignore[attr-defined]
-    l = record.low  # type: ignore[attr-defined]
+    lo = record.low  # type: ignore[attr-defined]
     c = record.close  # type: ignore[attr-defined]
     volume = record.volume  # type: ignore[attr-defined]
     base = record.ts_event  # type: ignore[attr-defined]
-    extremes = (l, h) if c >= o else (h, l)
+    extremes = (lo, h) if c >= o else (h, lo)
     out = []
     for offset, (raw, size) in enumerate(
         [(o, 0), (extremes[0], 0), (extremes[1], 0), (c, volume)]

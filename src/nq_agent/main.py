@@ -593,22 +593,35 @@ class Engine:
         trades_taken and is_halted live on Engine; SessionManager owns the day
         boundary and exposes it only through current_session_date, so this is
         a before/after comparison around each call to session.on_bar rather
-        than a signal SessionManager pushes. `prior_session_date is None`
-        means this is the engine's first-ever bar (a cold start, or the one
-        adoption/start that turns a resume into a running session) rather
-        than a rollover -- trades_taken/is_halted are already exactly what
-        the constructor set them to (0/False, or restored from prior state),
-        and must not be clobbered back to 0/False here.
+        than a signal SessionManager pushes.
+
+        `prior_session_date is None` is the engine's first-ever bar, which is
+        a rollover in disguise when the state that was restored belongs to an
+        EARLIER session than the bar that just arrived -- a run resuming
+        yesterday's state on today's data, which is exactly what each fixture
+        after the first is in a multi-fixture backtest. Yesterday's
+        trades_taken, is_halted and daily risk figure must not gate today's
+        trading: one halted day would silently poison every later day of a
+        backtest. Only a first bar that lands IN the resumed session (the
+        adoption case) keeps the restored counters, which is the reason they
+        were persisted at all.
         """
         current = self._session.current_session_date
-        if prior_session_date is not None and current != prior_session_date:
+        if current is None:
+            return
+        rolled = (
+            current != prior_session_date
+            if prior_session_date is not None
+            else self._resumed_session_date is not None
+            and current != self._resumed_session_date
+        )
+        if rolled:
             self.trades_taken = 0
             self.is_halted = False
-            if current is not None:
-                # Rolls the daily loss figure only. The trailing drawdown is
-                # measured over the life of the account and deliberately
-                # survives the boundary -- see RiskManager.start_session.
-                self._risk.start_session(current)
+            # Rolls the daily loss figure only. The trailing drawdown is
+            # measured over the life of the account and deliberately
+            # survives the boundary -- see RiskManager.start_session.
+            self._risk.start_session(current)
 
     async def _teardown(self) -> None:
         """Close the session and release every collaborator's resources.
