@@ -209,6 +209,8 @@ def test_entry_cap_ends_the_day() -> None:
 
 def in_trade(exit_mode: str, extra_bars: dict[int, dict[str, Any]], **kwargs: Any) -> Driver:
     bars = {10: bar_record(f1=0.2, **AF), 15: bar_record(f1=0.2, **AF)}
+    # v1.1 cells enter without the regime layer; the AF fields in the base
+    # bars are then inert annotations.
     bars.update(extra_bars)
     driver = Driver(TickFlowRegime(decisions=day_file(bars), exit_mode=exit_mode, **kwargs))
     driver.feed([bar_5m(10), bar_5m(15)])
@@ -354,3 +356,82 @@ def test_registered_and_buildable() -> None:
 
     assert STRATEGIES["tfr"] is TickFlowRegime
     assert isinstance(build_strategy("tfr"), TickFlowRegime)
+
+
+# --- v1.1 Flow Core (cycle-1 amendment) -------------------------------------
+
+
+def test_flow_decay_exits_after_two_bars_against() -> None:
+    driver = in_trade(
+        "fd",
+        {
+            20: bar_record(f1=-0.02),  # through zero against the long
+            25: bar_record(f1=0.03),  # back positive: hysteresis resets
+            30: bar_record(f1=-0.02),
+            35: bar_record(f1=-0.01),
+        },
+        regime_required=False,
+    )
+
+    assert driver.feed([bar_5m(20), bar_5m(25), bar_5m(30)]) == []
+    signals = driver.feed([bar_5m(35)])
+    assert [s.intent for s in signals] == [SignalIntent.FLATTEN]
+    assert "flow decay" in signals[0].reason
+
+
+def test_fstack_hostile_flow_beats_decay_hysteresis() -> None:
+    driver = in_trade("fstack", {20: bar_record(f1=-0.2)}, regime_required=False)
+
+    signals = driver.feed([bar_5m(20)])
+
+    assert "hostile flow" in signals[0].reason
+
+
+def test_fstack_decay_fires_when_flow_fades_without_hostility() -> None:
+    driver = in_trade(
+        "fstack",
+        {20: bar_record(f1=-0.02), 25: bar_record(f1=-0.03)},
+        regime_required=False,
+    )
+
+    signals = driver.feed([bar_5m(20), bar_5m(25)])
+
+    assert "flow decay" in signals[0].reason
+
+
+def test_data_health_halt_flattens_and_stands_down() -> None:
+    # Bars 20/25/30 have no decision records at all: three stale bars.
+    driver = in_trade("fd", {}, regime_required=False)
+
+    signals = driver.feed([bar_5m(20), bar_5m(25), bar_5m(30)])
+
+    assert [s.intent for s in signals] == [SignalIntent.FLATTEN]
+    assert "data health" in signals[0].reason
+    assert driver.strategy._state == DONE
+
+
+def test_regime_fields_cannot_reach_trading_decisions_when_off() -> None:
+    """The spec 8 invariant: with regime_required=False, scrambling every
+    regime field must produce the identical signal stream."""
+    bars = {
+        10: bar_record(f1=0.2, **AF),
+        15: bar_record(f1=0.2, **AF),
+        20: bar_record(f1=-0.02),
+        25: bar_record(f1=-0.03),
+    }
+    scrambled = {
+        k: dict(v, regime="QUIET", t_af=0.0, mahal=None) for k, v in bars.items()
+    }
+    feed_bars = [bar_5m(i) for i in (10, 15, 20, 25)]
+
+    a = Driver(TickFlowRegime(decisions=day_file(bars), exit_mode="fd", regime_required=False))
+    b = Driver(
+        TickFlowRegime(decisions=day_file(scrambled), exit_mode="fd", regime_required=False)
+    )
+    signals_a = a.feed(feed_bars)
+    signals_b = b.feed(feed_bars)
+
+    assert [(s.intent, s.direction) for s in signals_a] == [
+        (s.intent, s.direction) for s in signals_b
+    ]
+    assert len(signals_a) == 2  # entry + flow-decay exit

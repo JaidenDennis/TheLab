@@ -74,6 +74,22 @@ def build_variants(decisions_dir: Path) -> dict[str, partial[TickFlowRegime]]:
         # 6. confirmation/veto features
         "stack_f4": base(exit_mode="stack", f4_confirm=True),
         "stack_f3": base(exit_mode="stack", f3_veto=True),
+        # ---- v1.1 Flow Core (cycle-1 amendment, all pre-declared before
+        # any v1.1 result existed; regime demoted to annotations) ----
+        "fc_hf": base(exit_mode="hf", regime_required=False),
+        "fc_fd": base(exit_mode="fd", regime_required=False),
+        "fc_fstack": base(exit_mode="fstack", regime_required=False),
+        "fc_t13": base(exit_mode="t13", regime_required=False),
+        "fc_fd_h1": base(exit_mode="fd", regime_required=False, fd_hysteresis_bars=1),
+        "fc_fstack_q60": base(exit_mode="fstack", regime_required=False, q_entry_pct=60),
+        "fc_fstack_q80": base(exit_mode="fstack", regime_required=False, q_entry_pct=80),
+        "fc_fstack_v0": base(exit_mode="fstack", regime_required=False, vol_z_min=0.0),
+        "fc_fstack_v10": base(exit_mode="fstack", regime_required=False, vol_z_min=1.0),
+        "fc_fstack_qhf55": base(exit_mode="fstack", regime_required=False, q_hf_pct=55),
+        "fc_fstack_qhf85": base(exit_mode="fstack", regime_required=False, q_hf_pct=85),
+        "fc_fstack_f4": base(exit_mode="fstack", regime_required=False, f4_confirm=True),
+        "fc_fstack_f3": base(exit_mode="fstack", regime_required=False, f3_veto=True),
+        "fc_fstack_cap5": base(exit_mode="fstack", regime_required=False, max_entries_per_day=5),
     }
 
 

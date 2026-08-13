@@ -53,7 +53,9 @@ PENDING = "pending"
 IN_TRADE = "in_trade"
 DONE = "done"
 
-EXIT_MODES = ("hf", "ri", "stack", "t13")
+# v1.0 modes (regime-based) kept for the record; v1.1 adds the flow-native
+# family: "fd" (flow decay) and "fstack" (fd + hf, whichever fires first).
+EXIT_MODES = ("hf", "ri", "stack", "t13", "fd", "fstack")
 
 
 def _dec(value: Any) -> Decimal | None:
@@ -77,6 +79,7 @@ class TickFlowRegime(Strategy):
         p_exit: float = 0.40,
         vol_z_min: float = 0.5,
         hysteresis_bars: int = 2,
+        fd_hysteresis_bars: int = 2,
         t13_bars: int = 13,
         f4_confirm: bool = False,
         f3_veto: bool = False,
@@ -99,6 +102,7 @@ class TickFlowRegime(Strategy):
         self._p_exit = p_exit
         self._vol_z_min = vol_z_min
         self._hysteresis = hysteresis_bars
+        self._fd_hysteresis = fd_hysteresis_bars
         self._t13 = t13_bars
         self._f4_confirm = f4_confirm
         self._f3_veto = f3_veto
@@ -126,6 +130,8 @@ class TickFlowRegime(Strategy):
         self._bars_held = 0
         self._ri_regime_count = 0
         self._ri_prob_count = 0
+        self._fd_count = 0
+        self._stale_bars = 0
         self._reverse_into: str | None = None
 
     def on_session_start(self, session_date: date) -> None:
@@ -175,6 +181,18 @@ class TickFlowRegime(Strategy):
                 self._state = ACTIVE
 
         record = self._bar_record(index)
+
+        # Data-health halt (v1.1): feature records missing for more than two
+        # consecutive decision bars means the feed and the features have
+        # diverged -- stand the session down rather than trade blind.
+        if self._day is not None and self._state in (ACTIVE, PENDING, IN_TRADE):
+            self._stale_bars = self._stale_bars + 1 if record is None else 0
+            if self._stale_bars > 2:
+                if self._state == IN_TRADE and context.position is not None:
+                    held = context.position.direction
+                    return self._exit(bar, held, "data health halt", terminal=True)
+                self._state = DONE
+                return None
 
         # Model health (spec section 7): a bar off the fitted model's map
         # stands the session down. Never trade a model outside its support.
@@ -335,6 +353,25 @@ class TickFlowRegime(Strategy):
                 if hostile:
                     return self._exit(bar, position.direction, "hostile flow")
 
+        if self._exit_mode in ("fd", "fstack"):
+            # Flow decay: F1_5 through zero AGAINST the position for
+            # `fd_hysteresis` consecutive bars. Thesis-symmetric: entered on
+            # extreme flow in this direction, out when flow no longer points
+            # this way at all.
+            f1_now = record.get("f1_5")
+            against = f1_now is not None and (f1_now < 0 if long else f1_now > 0)
+            self._fd_count = self._fd_count + 1 if against else 0
+            if self._fd_count >= self._fd_hysteresis:
+                return self._exit(bar, position.direction, "flow decay")
+
+        if self._exit_mode == "fstack":
+            q_hf = self._q("hf")
+            f1 = record.get("f1_5")
+            if q_hf is not None and f1 is not None:
+                hostile = f1 <= -q_hf if long else f1 >= q_hf
+                if hostile:
+                    return self._exit(bar, position.direction, "hostile flow")
+
         if self._exit_mode in ("ri", "stack"):
             self._ri_regime_count = (
                 self._ri_regime_count + 1 if record.get("regime") != "AF" else 0
@@ -375,6 +412,7 @@ class TickFlowRegime(Strategy):
         self._bars_held = 0
         self._ri_regime_count = 0
         self._ri_prob_count = 0
+        self._fd_count = 0
         self._state = DONE if terminal else ACTIVE
         return Signal(
             timestamp=bar.close_time,
@@ -398,6 +436,8 @@ class TickFlowRegime(Strategy):
             "bars_held": self._bars_held,
             "ri_regime_count": self._ri_regime_count,
             "ri_prob_count": self._ri_prob_count,
+            "fd_count": self._fd_count,
+            "stale_bars": self._stale_bars,
             "reverse_into": self._reverse_into,
         }
 
@@ -411,5 +451,7 @@ class TickFlowRegime(Strategy):
         self._bars_held = int(state.get("bars_held", 0))
         self._ri_regime_count = int(state.get("ri_regime_count", 0))
         self._ri_prob_count = int(state.get("ri_prob_count", 0))
+        self._fd_count = int(state.get("fd_count", 0))
+        self._stale_bars = int(state.get("stale_bars", 0))
         raw_reverse = state.get("reverse_into")
         self._reverse_into = None if raw_reverse is None else str(raw_reverse)
