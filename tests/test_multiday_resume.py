@@ -193,6 +193,51 @@ async def test_resuming_into_a_new_session_starts_fresh_day_counters(
     assert opened, "day two never traded -- yesterday's state gated it"
 
 
+async def test_what_a_strategy_learns_at_session_end_is_persisted(tmp_path: Path) -> None:
+    """Strategy.on_session_end banks cross-session statistics (SME's rolling
+    daily range, its OFI distribution), and it runs after the last bar's
+    persist. The teardown must persist again, or every multi-fixture backtest
+    resumes each morning without the memory it built overnight -- this
+    surfaced as a 20-session warmup that never completed across 947 real
+    sessions."""
+    from nq_agent.state import StateStore
+
+    def tick(hhmmss: str, price: str) -> str:
+        return json.dumps({"ts": f"2026-07-15T{hhmmss}+00:00", "price": price, "size": 1})
+
+    fixture = tmp_path / "one-day.jsonl"
+    fixture.write_text(
+        "\n".join(
+            [
+                tick("13:30:30", "20000.00"),
+                tick("13:31:30", "20010.00"),
+                tick("13:32:30", "19990.00"),
+                tick("20:30:30", "20000.00"),
+                tick("20:31:30", "20000.00"),
+            ]
+        )
+        + "\n"
+    )
+    config = tmp_path / "sme.yaml"
+    config.write_text(
+        f"data_dir: {tmp_path.as_posix()}\n"
+        "timeframes: [1m, 5m]\n"
+        "executors:\n"
+        "  - name: dryrun_broker\n"
+        "    type: dryrun\n"
+        "    enabled: true\n"
+        "    accounts: [tradeify]\n"
+    )
+
+    await run_from_config(config, fixture, "sme", None)
+
+    state = await StateStore(tmp_path / "state.db").load_latest()
+    assert state is not None
+    assert state.strategy_state.get("daily_ranges"), (
+        "the daily range banked at session end never reached the state store"
+    )
+
+
 async def test_a_completed_multiday_replay_rerun_replays_nothing(tmp_path: Path) -> None:
     """Running the fixture to completion and then again must not re-dispatch
     anything: the latest persisted state already reflects the final bar, so

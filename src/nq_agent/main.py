@@ -264,8 +264,9 @@ class Engine:
         self._reconcile_interval = reconcile_interval_bars
         self._resumed_session_date = resumed_session_date
 
-    async def _persist(self) -> None:
-        session_date = self._session.current_session_date
+    async def _persist(self, session_date: date | None = None) -> None:
+        if session_date is None:
+            session_date = self._session.current_session_date
         if session_date is None:
             return
         await self._state.save(
@@ -279,6 +280,23 @@ class Engine:
                 risk_state=self._risk.snapshot(),
             )
         )
+
+    async def _end_session_and_persist(self) -> None:
+        """End the session, then persist what ending it changed.
+
+        Strategy.on_session_end is where cross-session statistics get banked
+        (a rolling daily range, an OFI distribution -- whatever the strategy
+        accumulates), and it runs AFTER the last bar's persist. Without this
+        follow-up save, everything a strategy learns at session end evaporates
+        on process exit, and a multi-fixture backtest resumes every morning
+        with the long memory it was supposed to have built overnight --
+        which surfaced as a strategy whose 20-session warmup never completed
+        across 947 sessions.
+        """
+        session_date = self._session.current_session_date
+        await self._session.end_session()
+        if session_date is not None:
+            await self._persist(session_date)
 
     async def reconcile(self, session_date: date, trigger: str) -> bool:
         """Ask the broker what it holds and act on the answer.
@@ -632,7 +650,7 @@ class Engine:
         place in the engine that swallows what it catches -- loudly.
         """
         steps: tuple[tuple[str, Callable[[], Awaitable[None]]], ...] = (
-            ("end_session", self._session.end_session),
+            ("end_session", self._end_session_and_persist),
             ("feed.close", self.feed.close),
             ("router.close", self.router.close),
         )
