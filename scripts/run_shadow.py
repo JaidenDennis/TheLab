@@ -76,10 +76,24 @@ async def main() -> None:
         fomc_dates=fomc_dates(),
     )
 
+    # The live stream never ends on its own; the session does. Stop at
+    # 16:35 ET (cutoff flatten is 16:30, strategy flat since 15:55) so the
+    # flow record persists and tomorrow's calibration can run.
+    end_et = datetime.now(ZoneInfo("America/New_York")).replace(
+        hour=16, minute=35, second=0, microsecond=0
+    )
+    remaining = (end_et - datetime.now(ZoneInfo("America/New_York"))).total_seconds()
+    if remaining <= 0:
+        raise SystemExit("started after 16:35 ET; nothing left of today's session")
     try:
-        await run_from_config(
-            CONFIG, None, "tfr", None, strategy_override=strategy, binding=binding
+        await asyncio.wait_for(
+            run_from_config(
+                CONFIG, None, "tfr", None, strategy_override=strategy, binding=binding
+            ),
+            timeout=remaining,
         )
+    except TimeoutError:
+        logging.info("16:35 ET: session over, stopping the stream")
     finally:
         # Persist the session's flow record for calibration + drift audit.
         payload = engine.aggregator.session_payload()
@@ -89,6 +103,12 @@ async def main() -> None:
             out = FLOW_STORE / f"{session.isoformat()}.json"
             out.write_text(json.dumps(payload), encoding="utf-8")
             print(f"flow record persisted: {out}")
+            from nq_agent.flow import compute_calibration
+
+            CALIBRATION.write_text(
+                json.dumps(compute_calibration(FLOW_STORE), indent=2), encoding="utf-8"
+            )
+            print(f"calibration refreshed for the next session: {CALIBRATION}")
 
 
 if __name__ == "__main__":

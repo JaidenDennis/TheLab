@@ -238,3 +238,38 @@ class FlowEngine:
             "t_af": None,
             "mahal": None,
         }
+
+
+def compute_calibration(flow_dir: Any, window: int = 60) -> dict[str, Any]:
+    """Nightly calibration from the trailing `window` persisted flow files.
+
+    Shared by scripts/calibrate_flow.py and the shadow runner's end-of-day
+    step, so there is exactly one definition of tomorrow's thresholds.
+    """
+    import json
+    from pathlib import Path
+    from statistics import fmean, pstdev
+
+    sessions = sorted(Path(flow_dir).glob("*.json"))[-window:]
+    if len(sessions) < 10:
+        raise ValueError(f"only {len(sessions)} flow sessions; need at least 10")
+    f1_abs: list[float] = []
+    vols: list[float] = []
+    for path in sessions:
+        payload = json.loads(path.read_text())
+        if payload["qa"]["excluded"]:
+            continue
+        minutes = {int(k): v for k, v in payload["minutes"].items()}
+        for end in range(5, 391, 5):
+            bars = [minutes[i] for i in range(end - 4, end + 1) if i in minutes]
+            if not bars:
+                continue
+            f1_abs.append(abs(flow_over(minutes, end, 5)))
+            vols.append(sum(m["vol"] for m in bars))
+    return {
+        "sessions": [sessions[0].stem, sessions[-1].stem],
+        "q_f1": {str(p): percentile(f1_abs, p) for p in (55, 60, 65, 70, 75, 80, 85)},
+        "vol_mean": fmean(vols),
+        "vol_sd": pstdev(vols),
+        "size_cut": 5,
+    }
