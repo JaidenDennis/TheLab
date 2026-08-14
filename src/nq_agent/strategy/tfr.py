@@ -384,6 +384,15 @@ class TickFlowRegime(Strategy):
             return None
 
         self._bars_held += 1
+        if context.is_warmup:
+            # The engine suppresses strategy signals during the restart
+            # catch-up window (journalled as signal_suppressed_backfill). An
+            # exit emitted here would be dropped AFTER _exit had already
+            # reset this state machine to ACTIVE/DONE -- leaving the still-
+            # open position unmanaged for the rest of the day. Keep counting
+            # held bars; every exit condition is re-evaluated on the first
+            # live bar, where the signal can actually reach the executor.
+            return None
         if self._session_mode == "rth":
             if et_time >= time(15, 55):
                 return self._exit(bar, position.direction, "time 15:55", terminal=True)
@@ -398,13 +407,8 @@ class TickFlowRegime(Strategy):
             return None
         long = position.direction is Direction.LONG
 
-        if self._exit_mode in ("hf", "stack"):
-            q_hf = self._q("hf", record)
-            f1 = record.get("f1_5")
-            if q_hf is not None and f1 is not None:
-                hostile = f1 <= -q_hf if long else f1 >= q_hf
-                if hostile:
-                    return self._exit(bar, position.direction, "hostile flow")
+        if self._exit_mode in ("hf", "stack") and self._hostile_flow(record, long):
+            return self._exit(bar, position.direction, "hostile flow")
 
         if self._exit_mode in ("fd", "fstack"):
             # Flow decay: F1_5 through zero AGAINST the position for
@@ -417,13 +421,10 @@ class TickFlowRegime(Strategy):
             if self._fd_count >= self._fd_hysteresis:
                 return self._exit(bar, position.direction, "flow decay")
 
-        if self._exit_mode == "fstack":
-            q_hf = self._q("hf", record)
-            f1 = record.get("f1_5")
-            if q_hf is not None and f1 is not None:
-                hostile = f1 <= -q_hf if long else f1 >= q_hf
-                if hostile:
-                    return self._exit(bar, position.direction, "hostile flow")
+        # fstack checks flow decay first (above), then hostile flow -- the
+        # order decides which reason a both-fire bar records.
+        if self._exit_mode == "fstack" and self._hostile_flow(record, long):
+            return self._exit(bar, position.direction, "hostile flow")
 
         if self._exit_mode in ("ri", "stack"):
             self._ri_regime_count = (
@@ -457,6 +458,14 @@ class TickFlowRegime(Strategy):
             return self._exit(bar, position.direction, "reverse: opposite signal")
 
         return None
+
+    def _hostile_flow(self, record: dict[str, Any], long: bool) -> bool:
+        """V-HF: flow beyond the hostile percentile AGAINST the position."""
+        q_hf = self._q("hf", record)
+        f1 = record.get("f1_5")
+        if q_hf is None or f1 is None:
+            return False
+        return bool(f1 <= -q_hf if long else f1 >= q_hf)
 
     def _exit(
         self, bar: Bar, direction: Direction, why: str, terminal: bool = False

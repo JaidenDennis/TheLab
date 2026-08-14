@@ -192,10 +192,18 @@ def main() -> None:
 
     if args.quote:
         total = 0.0
+        failures = []
         for day in days:
-            cost, _ = quote_cost(client, day)
-            total += cost
-        print(f"{len(days)} session(s): ${total:,.2f}")
+            try:
+                cost, _ = quote_cost(client, day)
+                total += cost
+            except Exception as exc:  # noqa: BLE001 - one bad date must not kill the quote
+                failures.append((day, f"{type(exc).__name__}: {str(exc)[:80]}"))
+        print(f"{len(days) - len(failures)} session(s) quotable: ${total:,.2f}")
+        for day, err in failures[:5]:
+            print(f"  unquotable {day}: {err}")
+        if len(failures) > 5:
+            print(f"  ... and {len(failures) - 5} more")
         return
 
     GAMMA_DIR.mkdir(parents=True, exist_ok=True)
@@ -208,7 +216,11 @@ def main() -> None:
         if day.isoformat() in existing:
             print(f"{day}: already tagged, skipping")
             continue
-        row = snapshot(client, day)
+        try:
+            row = snapshot(client, day)
+        except Exception as exc:  # noqa: BLE001 - keep the backfill moving
+            print(f"{day}: FAILED {type(exc).__name__}: {str(exc)[:100]}")
+            continue
         if row is None:
             print(f"{day}: no usable chain (holiday?), skipped")
             continue
