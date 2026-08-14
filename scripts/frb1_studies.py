@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from nq_agent.flow import flow_over  # noqa: E402
+
 ET = ZoneInfo("America/New_York")
 FLOW = Path("var/flow")
 DECISIONS = Path("var/decisions/k3m")
@@ -418,9 +420,112 @@ def study_ddr() -> dict:
     return result
 
 
+ES_FLOW = Path("var/es-flow")
+
+
+def study_ll() -> dict:
+    """ES->NQ flow lead-lag at minute resolution (the data's floor; the
+    spec's sub-minute aggregations would need tick re-parsing and are out
+    of scope for stage 1), plus the fc_t13 entry overlay."""
+    import statistics
+
+    def corr(a: list[float], b: list[float]) -> float:
+        if len(a) < 30:
+            return 0.0
+        ma, mb = statistics.fmean(a), statistics.fmean(b)
+        cov = sum((x - ma) * (y - mb) for x, y in zip(a, b, strict=True))
+        sa = math.sqrt(sum((x - ma) ** 2 for x in a))
+        sb = math.sqrt(sum((y - mb) ** 2 for y in b))
+        return 0.0 if sa == 0 or sb == 0 else cov / (sa * sb)
+
+    common = sorted(
+        set(p.stem for p in FLOW.glob("*.json")) & set(p.stem for p in ES_FLOW.glob("*.json"))
+    )
+    by_month: dict[str, dict[tuple[int, int], list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    es_f1_by_session: dict[str, dict[int, float]] = {}
+    for session in common:
+        nq = minutes_of(session)
+        es_payload = json.loads((ES_FLOW / f"{session}.json").read_text())
+        es = {int(k): v for k, v in es_payload["minutes"].items()}
+        es_flow_1m = {}
+        for i, m in es.items():
+            if m["vol"]:
+                es_flow_1m[i] = (m["buy"] - m["sell"]) / m["vol"]
+        # trailing 5m ES flow per minute (for the overlay)
+        es_f1_by_session[session] = {
+            i: flow_over(es, i, 5) for i in sorted(es) if i >= 5
+        }
+        closes = {i: float(m["close"]) for i, m in nq.items() if m.get("close")}
+        month = session[:7]
+        for window in (1, 5):
+            for lag in (1, 2, 3, 5):
+                xs, ys = [], []
+                for i in sorted(closes):
+                    if i + lag not in closes or i < window:
+                        continue
+                    if window == 1:
+                        if i not in es_flow_1m:
+                            continue
+                        x = es_flow_1m[i]
+                    else:
+                        x = flow_over(es, i, 5)
+                    xs.append(x)
+                    ys.append((closes[i + lag] - closes[i]) / closes[i])
+                if xs:
+                    by_month[month][(window, lag)].append(corr(xs, ys))
+
+    print("LL: monthly-mean corr(ES flow[w], NQ fwd return[+lag m]):")
+    panel: dict[str, dict] = {}
+    for window in (1, 5):
+        for lag in (1, 2, 3, 5):
+            monthly = [
+                statistics.fmean(v[(window, lag)])
+                for v in by_month.values()
+                if v.get((window, lag))
+            ]
+            if monthly:
+                mean_c = statistics.fmean(monthly)
+                positive = sum(1 for c in monthly if c > 0)
+                print(
+                    f"  w={window}m lag=+{lag}m: mean corr {mean_c:+.4f} "
+                    f"({positive}/{len(monthly)} months positive)"
+                )
+                panel[f"w{window}_lag{lag}"] = {
+                    "mean_corr": mean_c, "months_pos": positive, "months": len(monthly)
+                }
+
+    agree, disagree = [], []
+    for trade in trades_with_entry_bars():
+        series = es_f1_by_session.get(trade["session"])
+        if not series:
+            continue
+        eligible = [i for i in series if i <= trade["index"]]
+        if not eligible:
+            continue
+        es_f1 = series[max(eligible)]
+        if es_f1 == 0:
+            continue
+        (agree if (es_f1 > 0) == (trade["direction"] > 0) else disagree).append(trade["pnl"])
+    result: dict = {"panel": panel}
+    if agree and disagree:
+        ev_a = sum(agree) / len(agree)
+        ev_d = sum(disagree) / len(disagree)
+        p = bootstrap_p(agree, disagree) if ev_a > ev_d else bootstrap_p(disagree, agree)
+        print(
+            f"overlay: ES-flow AGREE n={len(agree)} EV=${ev_a:,.2f} | "
+            f"DISAGREE n={len(disagree)} EV=${ev_d:,.2f} | p={p:.4f}"
+        )
+        result["overlay"] = {
+            "agree": [len(agree), ev_a], "disagree": [len(disagree), ev_d], "p": p
+        }
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("study", choices=["far", "vct", "ssf", "ddr"])
+    parser.add_argument("study", choices=["far", "vct", "ssf", "ddr", "ll"])
     parser.add_argument("--window", type=int, default=90, help="FAR AR(1) window, minutes")
     parser.add_argument("--out", type=Path, default=Path("var/frb1"))
     args = parser.parse_args()
@@ -429,7 +534,9 @@ def main() -> None:
     if args.study == "far":
         result = study_far(window=args.window)
     else:
-        runner = {"vct": study_vct, "ssf": study_ssf, "ddr": study_ddr}[args.study]
+        runner = {"vct": study_vct, "ssf": study_ssf, "ddr": study_ddr, "ll": study_ll}[
+            args.study
+        ]
         result = runner()
     (args.out / f"{args.study}.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
 

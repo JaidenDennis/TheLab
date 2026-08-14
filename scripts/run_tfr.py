@@ -93,13 +93,13 @@ def build_variants(decisions_dir: Path) -> dict[str, partial[TickFlowRegime]]:
     }
 
 
-def base_config(out_root: Path) -> Path:
+def base_config(out_root: Path, point_value: int = 20) -> Path:
     config = out_root / "tfr-base.yaml"
     config.write_text(
         f"data_dir: {out_root.as_posix()}\n"
         "timeframes: [1m, 5m]\n"
         "contract:\n"
-        "  point_value: 20\n"
+        f"  point_value: {point_value}\n"
         "  commission_per_round_turn: 10\n"
         "risk:\n"
         "  max_trades_per_day: 50\n"
@@ -142,6 +142,10 @@ async def main() -> None:
     parser.add_argument("--end", type=date.fromisoformat, default=date(2026, 8, 12))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--variant", default="exit_stack", help="variant name or 'all'")
+    parser.add_argument(
+        "--point-value", type=int, default=20,
+        help="contract point value: 20 NQ (default), 50 ES (FC-ES replication)",
+    )
     args = parser.parse_args()
 
     variants = build_variants(args.decisions)
@@ -155,7 +159,7 @@ async def main() -> None:
     print(f"{len(fixtures)} sessions {fixtures[0].stem}..{fixtures[-1].stem}")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    config = base_config(args.out)
+    config = base_config(args.out, point_value=args.point_value)
 
     summaries = []
     for name in names:
