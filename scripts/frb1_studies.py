@@ -316,7 +316,9 @@ def study_ssf() -> dict:
                 and abs(zs) >= 0.5
                 and 5 <= end <= 330
             ):
-                events.append({"session": session, "index": end, "big_sign": 1 if f1_big > 0 else -1})
+                events.append(
+                    {"session": session, "index": end, "big_sign": 1 if f1_big > 0 else -1}
+                )
         by_session_bars[session] = bars
         # forward returns for this session's events
         for event in [e for e in events if e["session"] == session]:
@@ -343,7 +345,9 @@ def study_ssf() -> dict:
                 f"  +{horizon} bars: n={len(values):<5} mean={sum(values) / len(values):>7.2f}  "
                 f"T={t_stat(values):.2f}"
             )
-            result[f"h{horizon}"] = {"n": len(values), "mean": sum(values) / len(values), "t": t_stat(values)}
+            result[f"h{horizon}"] = {
+                "n": len(values), "mean": sum(values) / len(values), "t": t_stat(values)
+            }
 
     # overlay: fc_t13 entries by big-lot agreement at entry bar
     agree, disagree = [], []
@@ -395,7 +399,8 @@ def study_ddr() -> dict:
                         fwd[horizon] = (closes[target] - closes[index]) * fade_sign
                 events.append({"session": path.stem, "fwd": fwd, "q": path.stem[:7]})
         len(events) * 252 / max(1, len(set(e["session"] for e in events)) and 200)
-        print(f"\nDDR |div| >= {threshold}: {len(events)} events (~{len(events) * 252 // 200}/year)")
+        yearly = len(events) * 252 // 200
+        print(f"\nDDR |div| >= {threshold}: {len(events)} events (~{yearly}/year)")
         panel = {}
         for horizon in (1, 3, 6, 13):
             values = [e["fwd"][horizon] for e in events if e["fwd"].get(horizon) is not None]
