@@ -104,3 +104,19 @@ uv run python scripts/track_a_gamma.py --regimes var/gamma/regimes.jsonl \
 Every regime decision is reproducible from the archived chains in
 var/gamma/raw; the tercile sweep is scripts/track_a_gamma.py's declared
 companion analysis (walk-forward percentile ranks).
+
+## 6. Post-report check: the losing streaks are NEG-regime events (2026-08-14)
+
+Prompted by a drawdown question: the three worst losing streaks in the
+fc_t13 record were cross-referenced against the regime series. 20 of 23
+streak days were NEG — the baseline mix (91% NEG among traded days). The
+record 7-day streak (2026-05-27 → 06-04, −$958/micro) was NEG all seven
+days; the costliest (2026-06-12 → 06-24, −$1,215/micro) was NEG on five
+of six, its lone POS day a knife-edge +$0.04B with spot on the flip.
+
+**Consequence for the thesis:** the EV split (§1) stands, but spec §1.3's
+claim that the gate "cuts drawdown by deleting days where dealers are
+structurally positioned against the strategy" is directly contradicted —
+the major drawdowns are NEG-regime phenomena the gate keeps. If GFM ever
+passes its gates, it is as an EV filter, not streak protection, and any
+sizing math must assume the full drawdown profile survives the gate.
