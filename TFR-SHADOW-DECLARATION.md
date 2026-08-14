@@ -24,3 +24,26 @@ AND execution-drift audit passes. Pass → smallest funded tier. Fail →
 dead; shadow data is spent evidence, no parameter rescue against it.
 
 Shadow clock starts at the first live-paper session, not at this commit.
+
+---
+
+## Addendum — funded-stage sizing policy (recorded 2026-08-14)
+
+**Does not alter the shadow**: the shadow trades a constant 1 MNQ and the
+gate reads per-contract economics, unchanged and still frozen.
+
+Decision (spec owner): at funded deployment, size **3 micros per trade** —
+the high-percentile-loss basis (~$100–120/micro against the worst
+realistic 13-bar-exit loss), sitting between the catastrophic basis
+(1 micro; disaster capped at $211 but a fifth of the earnings) and the
+typical-loss basis (5 micros; one catastrophic-stop day costs 23% of a
+standard $4,500 prop buffer). At 3 micros a catastrophic-stop day costs
+≈ $633 — under 15% of the buffer — and expected earnings scale 3×
+(today's replayed trade: +$747 at this size).
+
+Standing check before funding: if the shadow's OBSERVED loss
+distribution contradicts the ~$100–120/micro high-percentile assumption
+(catastrophic stop firing more often than the develop record's rate, or
+a fatter 13-bar loss tail), this policy is re-decided from the shadow
+data before any funded order. That review is risk operations, not a
+strategy-parameter change.
