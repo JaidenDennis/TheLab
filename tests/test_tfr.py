@@ -528,3 +528,20 @@ def test_24h_mode_uses_the_bars_own_block_table() -> None:
     driver = Driver(TickFlowRegime(decisions=decisions, regime_required=False, session_mode="all"))
 
     assert driver.feed([bar_5m_at(22, 25)]) == []  # fails closed for that block
+
+
+def test_a_shared_book_filled_after_construction_is_seen() -> None:
+    """THE first-live-session bug: the shadow wiring hands the strategy a
+    shared decision book that is EMPTY at construction time and filled by
+    the flow engine as ticks arrive. `decisions or {}` silently severed
+    that shared reference and the strategy stood down every live day while
+    every (pre-populated) backtest passed."""
+    book: dict[str, Any] = {}
+    driver = Driver(TickFlowRegime(decisions=book, regime_required=False))
+
+    # The flow engine fills the SAME dict after the strategy exists.
+    book.update(day_file({10: bar_record(f1=0.2, **AF)}))
+
+    signals = driver.feed([bar_5m(10)])
+
+    assert len(entries(signals)) == 1, "the late-filled shared book must be visible"

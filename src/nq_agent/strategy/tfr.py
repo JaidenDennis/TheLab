@@ -97,7 +97,12 @@ class TickFlowRegime(Strategy):
             raise ValueError(f"exit_mode must be one of {EXIT_MODES}, got {exit_mode!r}")
         if session_mode not in ("rth", "all"):
             raise ValueError(f"session_mode must be 'rth' or 'all', got {session_mode!r}")
-        self._decisions = decisions or {}
+        # `if ... is None`, NOT `or`: the live wiring hands over a SHARED,
+        # initially-EMPTY book that the flow engine fills as ticks arrive.
+        # `decisions or {}` would replace that empty-but-shared dict with a
+        # private one and the strategy would stare at nothing all day --
+        # which is exactly what happened on the first live session.
+        self._decisions = decisions if decisions is not None else {}
         self._exit_mode = exit_mode
         self._q_entry_pct = str(q_entry_pct)
         self._q_hf_pct = str(q_hf_pct)

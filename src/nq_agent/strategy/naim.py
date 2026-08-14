@@ -101,7 +101,8 @@ class NoiseAreaIntradayMomentum(Strategy):
             raise ValueError(f"ofi_mode must be 'proxy' or 'off' in v1, got {ofi_mode!r}")
         if stop_mode not in ("close", "touch"):
             raise ValueError(f"stop_mode must be 'close' or 'touch', got {stop_mode!r}")
-        self._curves = noise_curves or {}
+        # Same shared-reference rule as TFR's decisions book (see tfr.py).
+        self._curves = noise_curves if noise_curves is not None else {}
         self._trigger_mode = trigger_mode
         self._ofi_mode = ofi_mode
         self._n_ofi = n_ofi

@@ -19,12 +19,15 @@ a closed 5m Bar reaches the strategy, its decision record already exists.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from nq_agent.models import Tick
+
+logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 SIZE_CUTS = (3, 5, 10, 20)
@@ -226,6 +229,8 @@ class FlowEngine:
             self._session = session
             self._aggregator = MinuteFlowAggregator()
             self._last_emitted = 0
+            logger.info("flow engine: new session %s (calibration q70=%s)", session,
+                        (self._calibration.get("q_f1") or {}).get("70"))
             self._book[session] = {
                 "model": "live",
                 "mahal_cut": None,
@@ -260,6 +265,7 @@ class FlowEngine:
         mean = float(self._calibration.get("vol_mean", 0.0))
         sd = float(self._calibration.get("vol_sd", 0.0))
         z_vol = 0.0 if sd == 0 else (vol_5m - mean) / sd
+        logger.info("flow engine: bar %s emitted (f1_5=%.4f)", end, f1_5)
         self._book[self._session]["bars"][str(end)] = {
             "close": float(window[-1]["close"]),
             "f1_2": flow_over(minutes, end, 2),
