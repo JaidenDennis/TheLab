@@ -91,9 +91,12 @@ class TickFlowRegime(Strategy):
         tick_size: Decimal = Decimal("0.25"),
         fomc_dates: set[date] | None = None,
         regime_required: bool = True,
+        session_mode: str = "rth",
     ) -> None:
         if exit_mode not in EXIT_MODES:
             raise ValueError(f"exit_mode must be one of {EXIT_MODES}, got {exit_mode!r}")
+        if session_mode not in ("rth", "all"):
+            raise ValueError(f"session_mode must be 'rth' or 'all', got {session_mode!r}")
         self._decisions = decisions or {}
         self._exit_mode = exit_mode
         self._q_entry_pct = str(q_entry_pct)
@@ -117,6 +120,11 @@ class TickFlowRegime(Strategy):
         # regime layer bypassed entirely, so the layer's contribution is
         # measured rather than assumed.
         self._regime_required = regime_required
+        # "all": trade every hour except the 16:30-18:00 blackout and the
+        # engine's midnight session boundary, with entry buffers sized so a
+        # full 13-bar hold cannot land inside either. "rth": the declared
+        # shadow behaviour, unchanged.
+        self._session_mode = session_mode
         self._reset_day()
 
     # ------------------------------------------------------------------ day
@@ -148,10 +156,15 @@ class TickFlowRegime(Strategy):
         record = self._day.get("bars", {}).get(str(index))
         return record if isinstance(record, dict) else None
 
-    def _q(self, table_key: str) -> float | None:
+    def _q(self, table_key: str, record: dict[str, Any] | None = None) -> float | None:
         if self._day is None:
             return None
-        table = self._day.get("q_f1")
+        blocks = self._day.get("q_f1_blocks")
+        if blocks is not None:
+            block = (record or {}).get("block")
+            table = blocks.get(block) if block else None
+        else:
+            table = self._day.get("q_f1")
         if not table:
             return None
         key = self._q_entry_pct if table_key == "entry" else self._q_hf_pct
@@ -166,9 +179,14 @@ class TickFlowRegime(Strategy):
         et = bar.close_time.astimezone(ET)
         et_time = et.time()
         session_date = et.date()
-        if not (time(9, 30) < et_time <= time(16, 0)):
-            return None
-        index = (et.hour - 9) * 60 + et.minute - 30
+        if self._session_mode == "rth":
+            if not (time(9, 30) < et_time <= time(16, 0)):
+                return None
+            index = (et.hour - 9) * 60 + et.minute - 30
+        else:
+            index = et.hour * 60 + et.minute
+            if index == 0:
+                index = 1440  # a bar closing exactly at midnight ends the day
 
         # _day is derived, not persisted: derive it on the first bar seen,
         # including the first bar after a mid-session resume, so a restored
@@ -234,8 +252,16 @@ class TickFlowRegime(Strategy):
             return None
 
         # Entry window, calendar, caps.
-        if et_time < time(9, 35) or et_time > self._entry_end:
-            return None
+        if self._session_mode == "rth":
+            if et_time < time(9, 35) or et_time > self._entry_end:
+                return None
+        else:
+            # Buffers sized to the 13-bar (65 min) hold: no entry whose hold
+            # would cross the 16:30 blackout or the midnight boundary.
+            if time(15, 20) <= et_time < time(18, 5):
+                return None
+            if et_time >= time(22, 50) or et_time < time(0, 5):
+                return None
         if session_date in self._fomc_dates and et_time > time(13, 0):
             return None
         if self._entries_today >= self._max_entries:
@@ -303,7 +329,7 @@ class TickFlowRegime(Strategy):
         z_vol = record.get("z_vol")
         if z_vol is None or z_vol < self._vol_z_min:
             return None
-        q_entry = self._q("entry")
+        q_entry = self._q("entry", record)
         f1 = record.get("f1_5")
         if q_entry is None or f1 is None or abs(f1) < q_entry or f1 == 0:
             return None
@@ -318,7 +344,7 @@ class TickFlowRegime(Strategy):
             # with price refusing to move (z_eff <= -1) opposing the entry.
             z_eff = record.get("z_eff")
             if z_eff is not None and z_eff <= -1.0:
-                q_entry_val = self._q("entry")
+                q_entry_val = self._q("entry", record)
                 f1_val = record.get("f1_5") or 0.0
                 if q_entry_val is not None and abs(f1_val) >= q_entry_val:
                     # flow this heavy being absorbed vetoes trading WITH it
@@ -338,15 +364,22 @@ class TickFlowRegime(Strategy):
             return None
 
         self._bars_held += 1
-        if et_time >= time(15, 55):
-            return self._exit(bar, position.direction, "time 15:55", terminal=True)
+        if self._session_mode == "rth":
+            if et_time >= time(15, 55):
+                return self._exit(bar, position.direction, "time 15:55", terminal=True)
+        else:
+            if time(16, 25) <= et_time < time(18, 0):
+                # Pre-blackout flatten; the evening session may re-enter.
+                return self._exit(bar, position.direction, "blackout flatten")
+            if et_time >= time(23, 45):
+                return self._exit(bar, position.direction, "midnight flatten", terminal=True)
 
         if record is None:
             return None
         long = position.direction is Direction.LONG
 
         if self._exit_mode in ("hf", "stack"):
-            q_hf = self._q("hf")
+            q_hf = self._q("hf", record)
             f1 = record.get("f1_5")
             if q_hf is not None and f1 is not None:
                 hostile = f1 <= -q_hf if long else f1 >= q_hf
@@ -365,7 +398,7 @@ class TickFlowRegime(Strategy):
                 return self._exit(bar, position.direction, "flow decay")
 
         if self._exit_mode == "fstack":
-            q_hf = self._q("hf")
+            q_hf = self._q("hf", record)
             f1 = record.get("f1_5")
             if q_hf is not None and f1 is not None:
                 hostile = f1 <= -q_hf if long else f1 >= q_hf

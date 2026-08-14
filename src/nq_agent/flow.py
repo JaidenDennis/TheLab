@@ -29,6 +29,7 @@ from nq_agent.models import Tick
 ET = ZoneInfo("America/New_York")
 SIZE_CUTS = (3, 5, 10, 20)
 RTH_LAST_INDEX = 390  # the minute ending 16:00 ET
+FULL_LAST_INDEX = 1440  # the minute ending midnight ET (full-day mode)
 
 
 def minute_index(ts_et: datetime) -> int:
@@ -40,6 +41,31 @@ def minute_index(ts_et: datetime) -> int:
     return (ts_et.hour - 9) * 60 + ts_et.minute - 30 + 1
 
 
+def minute_of_day_index(ts_et: datetime) -> int:
+    """Full-day indexing: 1 == the minute ending 00:01 ET ... 1440 == the
+    minute ending midnight. Used by the 24h research pipeline; the RTH
+    pipeline (and the live shadow) keep the 1..390 space."""
+    return ts_et.hour * 60 + ts_et.minute + 1
+
+
+def session_block(index: int) -> str:
+    """Which trading block a full-day minute index belongs to.
+
+    asia   18:01..03:00  (the evening of this ET calendar date + early AM)
+    london 03:01..09:30
+    rth    09:31..16:30
+    close  16:31..18:00  (the user's blackout window; features still
+                          aggregate here, trading never happens)
+    """
+    if index <= 180 or index > 1080:
+        return "asia"
+    if index <= 570:
+        return "london"
+    if index <= 990:
+        return "rth"
+    return "close"
+
+
 class MinuteFlowAggregator:
     """Per-minute RTH flow aggregates from a tick stream, with QA.
 
@@ -49,7 +75,8 @@ class MinuteFlowAggregator:
     catch an inverted convention loudly.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, full_day: bool = False) -> None:
+        self._full_day = full_day
         self.minutes: dict[int, dict[str, Any]] = {}
         self._sizes: list[int] = []
         self._unknown = 0
@@ -61,8 +88,13 @@ class MinuteFlowAggregator:
 
     def on_tick(self, tick: Tick) -> None:
         ts_et = tick.ts.astimezone(ET)
-        index = minute_index(ts_et)
-        if not (1 <= index <= RTH_LAST_INDEX):
+        if self._full_day:
+            index = minute_of_day_index(ts_et)
+            limit = FULL_LAST_INDEX
+        else:
+            index = minute_index(ts_et)
+            limit = RTH_LAST_INDEX
+        if not (1 <= index <= limit):
             return
         self._total += 1
         self._sizes.append(tick.size)

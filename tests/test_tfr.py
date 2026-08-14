@@ -80,7 +80,7 @@ class Driver:
     def __init__(self, strategy: TickFlowRegime) -> None:
         self.strategy = strategy
         self.tracker = PositionTracker()
-        self.clock = SimClock(OPEN)
+        self.clock = SimClock(OPEN - timedelta(hours=12))  # room for London/Asia bars
         self.ctx = Context(self.clock, CAL, 500)
         self.trades = 0
         self.signals: list[Signal] = []
@@ -435,3 +435,96 @@ def test_regime_fields_cannot_reach_trading_decisions_when_off() -> None:
         (s.intent, s.direction) for s in signals_b
     ]
     assert len(signals_a) == 2  # entry + flow-decay exit
+
+
+# --- 24h mode (blackout experiment) -----------------------------------------
+
+
+def bar_5m_at(hour_utc: int, minute: int, close: str = "20000") -> Bar:
+    open_time = datetime(2026, 7, 15, hour_utc, minute, tzinfo=timezone.utc) - timedelta(
+        minutes=5
+    )
+    return Bar(
+        symbol="NQ",
+        timeframe="5m",
+        open_time=open_time,
+        open=Decimal(close),
+        high=Decimal(close) + 2,
+        low=Decimal(close) - 2,
+        close=Decimal(close),
+        volume=500,
+    )
+
+
+def day24(bars: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    table = {b: dict(Q_TABLE) for b in ("asia", "london", "rth", "close")}
+    return {
+        SESSION.isoformat(): {
+            "model": "flow24",
+            "mahal_cut": None,
+            "q_f1_blocks": table,
+            "size_cut": 5,
+            "bars": {str(k): v for k, v in bars.items()},
+        }
+    }
+
+
+def test_24h_mode_enters_in_london() -> None:
+    # 05:00 ET == 09:00 UTC in July; minute-of-day index 300.
+    record = bar_record(f1=0.2, **AF)
+    record["block"] = "london"
+    driver = Driver(
+        TickFlowRegime(decisions=day24({300: record}), regime_required=False, session_mode="all")
+    )
+
+    signals = driver.feed([bar_5m_at(9, 0)])
+
+    assert len(entries(signals)) == 1
+
+
+def test_24h_mode_blocks_entries_in_the_blackout_buffer() -> None:
+    # 15:30 ET (19:30 UTC), index 930 -- inside the 15:20-18:05 buffer.
+    record = bar_record(f1=0.2, **AF)
+    record["block"] = "rth"
+    driver = Driver(
+        TickFlowRegime(decisions=day24({930: record}), regime_required=False, session_mode="all")
+    )
+
+    assert driver.feed([bar_5m_at(19, 30)]) == []
+
+
+def test_24h_mode_flattens_before_the_blackout_and_rearms_for_asia() -> None:
+    entry_rec = bar_record(f1=0.2, **AF)
+    entry_rec["block"] = "rth"
+    asia_rec = bar_record(f1=0.2, **AF)
+    asia_rec["block"] = "asia"
+    bars = {
+        870: entry_rec,  # 14:30 ET entry (18:30 UTC)
+        875: dict(entry_rec),  # confirm bar
+        990: dict(entry_rec, block="rth"),  # 16:30 ET -> blackout flatten fires at 16:25+
+        985: dict(entry_rec),  # 16:25 ET
+        1105: asia_rec,  # 18:25 ET -- evening, may enter again
+    }
+    driver = Driver(
+        TickFlowRegime(decisions=day24(bars), regime_required=False, session_mode="all")
+    )
+    driver.feed([bar_5m_at(18, 30), bar_5m_at(18, 35)])
+    assert driver.strategy._state == IN_TRADE
+
+    flat = driver.feed([bar_5m_at(20, 25)])  # 16:25 ET
+    assert [s.intent for s in flat] == [SignalIntent.FLATTEN]
+    assert "blackout" in flat[0].reason
+
+    evening = driver.feed([bar_5m_at(22, 25)])  # 18:25 ET
+    assert len(entries(evening)) == 1, "the evening session must be able to re-enter"
+
+
+def test_24h_mode_uses_the_bars_own_block_table() -> None:
+    record = bar_record(f1=0.2, **AF)
+    record["block"] = "asia"
+    decisions = day24({1105: record})
+    decisions[SESSION.isoformat()]["q_f1_blocks"]["asia"] = None  # asia uncalibrated
+
+    driver = Driver(TickFlowRegime(decisions=decisions, regime_required=False, session_mode="all"))
+
+    assert driver.feed([bar_5m_at(22, 25)]) == []  # fails closed for that block

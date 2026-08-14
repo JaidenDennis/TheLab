@@ -73,10 +73,21 @@ def load_key(env_path: Path) -> str:
 def window_bounds(session: date, window: str) -> tuple[datetime, datetime]:
     # rth15 starts 09:15 so trailing 15-minute flow windows are complete
     # from the first tradable bar.
-    starts = {"rth": time(9, 30), "rth15": time(9, 15), "extended": time(0, 0)}
+    starts = {
+        "rth": time(9, 30),
+        "rth15": time(9, 15),
+        "extended": time(0, 0),
+        "full": time(0, 0),
+    }
     start_local = starts[window]
     start = datetime.combine(session, start_local, tzinfo=ET).astimezone(timezone.utc)
-    end = datetime.combine(session, SESSION_END, tzinfo=ET).astimezone(timezone.utc)
+    if window == "full":
+        # The whole ET calendar date: evening (Asia open) included.
+        end = datetime.combine(session + timedelta(days=1), time(0, 0), tzinfo=ET).astimezone(
+            timezone.utc
+        )
+    else:
+        end = datetime.combine(session, SESSION_END, tzinfo=ET).astimezone(timezone.utc)
     return start, end
 
 
@@ -155,7 +166,9 @@ def main() -> None:
     parser.add_argument("--start", type=date.fromisoformat, required=True)
     parser.add_argument("--end", type=date.fromisoformat, required=True)
     parser.add_argument("--schema", choices=["trades", "ohlcv-1m", "ohlcv-1s"], default="trades")
-    parser.add_argument("--window", choices=["rth", "rth15", "extended"], default="rth")
+    parser.add_argument(
+        "--window", choices=["rth", "rth15", "extended", "full"], default="rth"
+    )
     parser.add_argument(
         "--chunk-days",
         type=int,

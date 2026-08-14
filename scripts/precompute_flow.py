@@ -40,10 +40,10 @@ from nq_agent.flow import MinuteFlowAggregator
 from nq_agent.models import Tick
 
 
-def process_session(fixture: Path) -> dict[str, object]:
+def process_session(fixture: Path, full_day: bool = False) -> dict[str, object]:
     """One session through the SHARED aggregator (nq_agent.flow) -- the same
     code the live shadow harness runs, which is the whole point."""
-    aggregator = MinuteFlowAggregator()
+    aggregator = MinuteFlowAggregator(full_day=full_day)
     with fixture.open(encoding="utf-8") as handle:
         for raw in handle:
             record = json.loads(raw)
@@ -65,6 +65,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--start", type=date.fromisoformat, default=date(2000, 1, 1))
     parser.add_argument("--end", type=date.fromisoformat, default=date(2100, 1, 1))
+    parser.add_argument("--full", action="store_true", help="full-day (1..1440) indexing")
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -80,7 +81,7 @@ def main() -> None:
         out_path = args.out / f"{fixture.stem}.json"
         if out_path.exists():
             continue
-        session = process_session(fixture)
+        session = process_session(fixture, full_day=args.full)
         out_path.write_text(json.dumps(session), encoding="utf-8")
         qa = session["qa"]
         agreements.append(qa["tick_rule_agreement"])  # type: ignore[index]
