@@ -1,0 +1,17 @@
+# TFR shadow-forward configuration (declaration: TFR-SHADOW-DECLARATION.md).
+# Paper execution only -- dryrun executor, no webhook, no real orders.
+# MNQ economics: $2/point, ~$1 all-in round turn budgeted.
+data_dir: ./var/shadow
+timeframes: [1m, 5m]
+databento_symbol: NQ.v.0     # volume-rolled, matching every research fixture
+contract:
+  point_value: 2
+  commission_per_round_turn: 1
+risk:
+  max_trades_per_day: 10
+  duplicate_window_seconds: 0
+executors:
+  - name: shadow_paper
+    type: dryrun
+    enabled: true
+    accounts: [shadow]

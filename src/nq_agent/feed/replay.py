@@ -20,10 +20,20 @@ class ReplayFeed(DataFeed):
     components observe exactly the time the bar represents.
     """
 
-    def __init__(self, fixture_path: Path, symbol: str, clock: SimClock | None = None) -> None:
+    def __init__(
+        self,
+        fixture_path: Path,
+        symbol: str,
+        clock: SimClock | None = None,
+        tick_tap: object | None = None,
+    ) -> None:
         self._path = fixture_path
         self._symbol = symbol
         self._clock = clock
+        # Same contract as DatabentoFeed's tap: every tick, before
+        # aggregation. Lets the shadow harness rehearse on fixtures through
+        # the identical code path it will run live.
+        self._tick_tap = tick_tap
 
     def _ticks(self) -> Iterator[Tick]:
         with self._path.open(encoding="utf-8") as handle:
@@ -37,6 +47,7 @@ class ReplayFeed(DataFeed):
                     ts=datetime.fromisoformat(record["ts"]),
                     price=Decimal(record["price"]),
                     size=int(record["size"]),
+                    side=record.get("side"),
                 )
 
     def first_tick_time(self) -> datetime:
@@ -66,6 +77,8 @@ class ReplayFeed(DataFeed):
         # in full, so the history a live feed would have to backfill is already here.
         aggregator = BarAggregator(symbol, timeframes)
         for tick in self._ticks():
+            if self._tick_tap is not None:
+                self._tick_tap(tick)  # type: ignore[operator]
             for bar in aggregator.add_tick(tick):
                 if self._clock is not None:
                     self._clock.advance_to(bar.close_time)

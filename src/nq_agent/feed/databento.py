@@ -67,9 +67,14 @@ class DatabentoFeed(DataFeed):
         symbol: str = "NQ.c.0",
         dataset: str = DEFAULT_DATASET,
         queue_size: int = 10_000,
+        tick_tap: object | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("a Databento API key is required")
+        # Called with every live Tick BEFORE bar aggregation, so a feature
+        # engine tapping the stream has finished its bookkeeping by the time
+        # the closed bar reaches the strategy. None = no tap (default).
+        self._tick_tap = tick_tap
         self._api_key = api_key
         self._symbol = symbol
         self._dataset = dataset
@@ -116,11 +121,13 @@ class DatabentoFeed(DataFeed):
         return [bar for bar in bars if start <= bar.open_time < end]
 
     def _to_tick(self, record: object, symbol: str) -> Tick:
+        side = getattr(record, "side", None)
         return Tick(
             symbol=symbol,
             ts=_timestamp(record.ts_event),  # type: ignore[attr-defined]
             price=_price(record.price),  # type: ignore[attr-defined]
             size=int(record.size),  # type: ignore[attr-defined]
+            side=str(getattr(side, "value", side)) if side is not None else None,
         )
 
     # -- live ---------------------------------------------------------------
@@ -156,7 +163,10 @@ class DatabentoFeed(DataFeed):
                     raise ConnectionError(f"databento error: {record.err}")
                 if not isinstance(record, db.TradeMsg):
                     continue
-                for bar in aggregator.add_tick(self._to_tick(record, symbol)):
+                tick = self._to_tick(record, symbol)
+                if self._tick_tap is not None:
+                    self._tick_tap(tick)  # type: ignore[operator]
+                for bar in aggregator.add_tick(tick):
                     yield bar
         finally:
             # The trailing partial bucket is deliberately NOT flushed: a

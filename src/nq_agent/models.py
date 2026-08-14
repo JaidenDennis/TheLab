@@ -78,6 +78,10 @@ class Tick(Frozen):
     ts: UtcDatetime
     price: Decimal
     size: int
+    # Aggressor side as the venue reported it: "B" buy, "A" sell, None/"N"
+    # unknown. Optional so bar-only pipelines and old fixtures are untouched;
+    # the flow layer resolves unknowns with the tick rule.
+    side: str | None = None
 
 
 class Bar(Frozen):

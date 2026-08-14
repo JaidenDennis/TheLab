@@ -336,3 +336,36 @@ Resolved since this list was written (both fixes carry mutation-tested pins):
   flatten is withheld (journalled as `risk_flatten_withheld`) while the
   position belief is unreconciled, with the session cutoff flatten as the
   deliberate backstop. Note the fixes themselves postdate that review.
+
+---
+
+## TFR shadow-forward operation (declaration: TFR-SHADOW-DECLARATION.md)
+
+The shadow gate needs live sessions. Daily rhythm, ET:
+
+- **Before 09:30**: start the session process. It connects to Databento
+  live (included in the plan), taps ticks into the flow engine, and paper-
+  trades the declared fc_t13 variant through the production engine:
+
+      uv run python scripts/run_shadow.py
+
+  A restart mid-session resumes state and replays the intraday gap through
+  the warmup window; entries missed while down are suppressed, not
+  back-filled. Leave it running until after 16:30; it flattens at 15:55
+  and the engine closes the session.
+
+- **After the close** (the process persists the day's flow record itself):
+
+      uv run python scripts/calibrate_flow.py --flow var/flow --out var/calibration.json
+
+  refreshes tomorrow's thresholds from the trailing 60 sessions.
+
+- **Drift audit** (execution-quality half of the shadow gate): compare the
+  day's live decision records against an offline recomputation from the
+  persisted flow record with scripts/audit_drift.py. f1_5 must be exact;
+  investigate any missing bar before the next session.
+
+Gate accounting: 3 months or 60 trades, whichever is LONGER; EV >= +$20
+per trade NQ-equivalent, PF >= 1.10, median fill drift <= 1 tick. The
+journal under var/shadow is the ledger the verdict is read from. No
+parameter changes while the window runs -- the declaration is binding.

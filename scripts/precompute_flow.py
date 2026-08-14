@@ -32,114 +32,31 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
-ET = ZoneInfo("America/New_York")
-RTH_OPEN = time(9, 30)
-RTH_END = time(16, 0)
-SIZE_CUTS = (3, 5, 10, 20)
-
-
-def minute_index(et_hour: int, et_minute: int) -> int:
-    """1 == the minute ending 09:31; 390 == the minute ending 16:00."""
-    return (et_hour - 9) * 60 + et_minute - 30
+from nq_agent.flow import MinuteFlowAggregator
+from nq_agent.models import Tick
 
 
 def process_session(fixture: Path) -> dict[str, object]:
-    minutes: dict[int, dict[str, object]] = {}
-    sizes: list[int] = []
-    unknown = 0
-    total = 0
-    tick_rule_hits = 0
-    tick_rule_checked = 0
-    prev_price: Decimal | None = None
-    last_direction = 0  # tick-rule state: +1 buy, -1 sell
-
+    """One session through the SHARED aggregator (nq_agent.flow) -- the same
+    code the live shadow harness runs, which is the whole point."""
+    aggregator = MinuteFlowAggregator()
     with fixture.open(encoding="utf-8") as handle:
         for raw in handle:
             record = json.loads(raw)
-            ts = datetime.fromisoformat(record["ts"]).astimezone(ET)
-            # Bucket by the minute the tick belongs to; the bar "ending at"
-            # minute m contains ticks with time in [m-1, m). The index range
-            # check below is the RTH filter.
-            index = minute_index(ts.hour, ts.minute) + 1
-            if not (1 <= index <= 390):
-                continue
-
-            price = Decimal(record["price"])
-            size = int(record["size"])
-            side = record.get("side", "N")
-            total += 1
-            sizes.append(size)
-
-            # Tick rule: uptick = buy, downtick = sell, unchanged = carry.
-            if prev_price is not None:
-                if price > prev_price:
-                    rule = 1
-                elif price < prev_price:
-                    rule = -1
-                else:
-                    rule = last_direction
-            else:
-                rule = 0
-            if rule != 0:
-                last_direction = rule
-            prev_price = price
-
-            if side == "B":
-                direction = 1
-            elif side == "A":
-                direction = -1
-            else:
-                unknown += 1
-                direction = rule  # fallback per spec section 2
-            if side in ("B", "A") and rule != 0:
-                tick_rule_checked += 1
-                tick_rule_hits += int((1 if side == "B" else -1) == rule)
-
-            bucket = minutes.setdefault(
-                index,
-                {
-                    "close": None,
-                    "vol": 0,
-                    "buy": 0,
-                    "sell": 0,
-                    **{f"buy_ge{c}": 0 for c in SIZE_CUTS},
-                    **{f"sell_ge{c}": 0 for c in SIZE_CUTS},
-                },
+            aggregator.on_tick(
+                Tick(
+                    symbol="NQ",
+                    ts=datetime.fromisoformat(record["ts"]),
+                    price=Decimal(record["price"]),
+                    size=int(record["size"]),
+                    side=record.get("side"),
+                )
             )
-            bucket["close"] = str(price)
-            bucket["vol"] += size  # type: ignore[operator]
-            key = "buy" if direction >= 0 else "sell"
-            if direction != 0:
-                bucket[key] += size  # type: ignore[operator]
-                for cut in SIZE_CUTS:
-                    if size >= cut:
-                        bucket[f"{key}_ge{cut}"] += size  # type: ignore[operator]
-
-    sizes.sort()
-
-    def pct(p: float) -> int:
-        return sizes[min(len(sizes) - 1, int(len(sizes) * p))] if sizes else 0
-
-    unknown_share = unknown / total if total else 1.0
-    agreement = tick_rule_hits / tick_rule_checked if tick_rule_checked else 0.0
-    return {
-        "qa": {
-            "ticks": total,
-            "unknown_share": round(unknown_share, 5),
-            "tick_rule_agreement": round(agreement, 4),
-            "size_p50": pct(0.50),
-            "size_p90": pct(0.90),
-            "size_p95": pct(0.95),
-            "size_p99": pct(0.99),
-            "excluded": unknown_share > 0.05,
-        },
-        "minutes": {str(k): v for k, v in sorted(minutes.items())},
-    }
+    return aggregator.session_payload()
 
 
 def main() -> None:
