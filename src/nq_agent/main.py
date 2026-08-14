@@ -33,6 +33,7 @@ from nq_agent.risk.limits import RiskManager
 from nq_agent.router import Router
 from nq_agent.session import SessionManager, build_protective_flatten, write_signal_emitted
 from nq_agent.state import StateStore
+from nq_agent.strategy.afr import AbsorptionFlowReversal
 from nq_agent.strategy.always import AlwaysStrategy
 from nq_agent.strategy.base import Strategy
 from nq_agent.strategy.naim import NoiseAreaIntradayMomentum
@@ -60,6 +61,9 @@ STRATEGIES: dict[str, type[Strategy]] = {
     # Tick-Flow Regime (spec TFR v1.0). Needs precomputed decision files
     # (precompute_flow -> fit_regimes); without them every day stands down.
     "tfr": TickFlowRegime,
+    # Absorption Flow Reversal (spec AFR v1.0): fades absorbed aggression.
+    # Same decision files as TFR; stands down without them.
+    "afr": AbsorptionFlowReversal,
 }
 
 
