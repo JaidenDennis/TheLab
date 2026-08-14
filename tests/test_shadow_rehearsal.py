@@ -76,7 +76,8 @@ def test_full_day_through_the_exact_live_wiring(tmp_path: Path) -> None:
         "timeframes: [1m, 5m]\n"
         "contract:\n  point_value: 2\n  commission_per_round_turn: 1\n"
         "risk:\n  max_trades_per_day: 10\n  duplicate_window_seconds: 0\n"
-        "executors:\n  - name: shadow_paper\n    type: dryrun\n    enabled: true\n    accounts: [shadow]\n"
+        "executors:\n  - name: shadow_paper\n    type: dryrun\n"
+        "    enabled: true\n    accounts: [shadow]\n"
     )
 
     # THE live-only condition: the book is EMPTY when the strategy is built.
