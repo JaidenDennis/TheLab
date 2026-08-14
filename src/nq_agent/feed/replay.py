@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -25,7 +25,7 @@ class ReplayFeed(DataFeed):
         fixture_path: Path,
         symbol: str,
         clock: SimClock | None = None,
-        tick_tap: object | None = None,
+        tick_tap: Callable[[Tick], None] | None = None,
     ) -> None:
         self._path = fixture_path
         self._symbol = symbol
@@ -78,7 +78,7 @@ class ReplayFeed(DataFeed):
         aggregator = BarAggregator(symbol, timeframes)
         for tick in self._ticks():
             if self._tick_tap is not None:
-                self._tick_tap(tick)  # type: ignore[operator]
+                self._tick_tap(tick)
             for bar in aggregator.add_tick(tick):
                 if self._clock is not None:
                     self._clock.advance_to(bar.close_time)

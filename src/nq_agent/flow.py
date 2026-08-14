@@ -222,22 +222,41 @@ class FlowEngine:
     def aggregator(self) -> MinuteFlowAggregator:
         return self._aggregator
 
+    def _new_session(self, session: str) -> None:
+        self._session = session
+        self._aggregator = MinuteFlowAggregator()
+        self._last_emitted = 0
+        logger.info("flow engine: new session %s (calibration q70=%s)", session,
+                    (self._calibration.get("q_f1") or {}).get("70"))
+        self._book[session] = {
+            "model": "live",
+            "mahal_cut": None,
+            "q_f1": self._calibration.get("q_f1"),
+            "size_cut": self._calibration.get("size_cut", 5),
+            "bars": {},
+        }
+
+    def preload_session(self, session: str, payload: dict[str, Any]) -> None:
+        """Seed a session's minutes from an earlier run's persisted flow file.
+
+        A mid-session restart builds a fresh engine whose aggregator never saw
+        the morning's ticks; `flow_over` skips missing minutes silently, so
+        without this every post-restart feature (f1_5, f1_15, z_vol) would be
+        computed over truncated windows while a restored position is being
+        managed on them. `_last_emitted` stays 0, so the first live tick
+        re-emits the pre-restart decision bars from the preloaded minutes.
+
+        QA counters are NOT in the payload in restorable form -- they restart
+        at zero and describe the post-restart stream only.
+        """
+        self._new_session(session)
+        self._aggregator.minutes = {int(k): v for k, v in payload["minutes"].items()}
+
     def on_tick(self, tick: Tick) -> None:
         ts_et = tick.ts.astimezone(ET)
         session = ts_et.date().isoformat()
         if session != self._session:
-            self._session = session
-            self._aggregator = MinuteFlowAggregator()
-            self._last_emitted = 0
-            logger.info("flow engine: new session %s (calibration q70=%s)", session,
-                        (self._calibration.get("q_f1") or {}).get("70"))
-            self._book[session] = {
-                "model": "live",
-                "mahal_cut": None,
-                "q_f1": self._calibration.get("q_f1"),
-                "size_cut": self._calibration.get("size_cut", 5),
-                "bars": {},
-            }
+            self._new_session(session)
 
         # A tick in minute-index N means every 5m boundary <= N-1 is now
         # complete; emit any decision bars not yet written.
@@ -295,7 +314,11 @@ def compute_calibration(flow_dir: Any, window: int = 60) -> dict[str, Any]:
     vols: list[float] = []
     for path in sessions:
         payload = json.loads(path.read_text())
-        if payload["qa"]["excluded"]:
+        # `partial` marks a record persisted by a run that died before the
+        # session end (see run_shadow's finally block): its truncated volumes
+        # would drag vol_mean/vol_sd and the q_f1 percentiles. Research flow
+        # files never carry the key, so `.get` leaves them all included.
+        if payload["qa"]["excluded"] or payload.get("partial"):
             continue
         minutes = {int(k): v for k, v in payload["minutes"].items()}
         for end in range(5, 391, 5):

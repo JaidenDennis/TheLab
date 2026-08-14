@@ -18,16 +18,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from nq_agent.clock import RealClock
 from nq_agent.config import load_settings
 from nq_agent.feed.databento import DatabentoFeed
 from nq_agent.feed.reconnecting import ReconnectingFeed
-from nq_agent.flow import FlowEngine
+from nq_agent.flow import ET, FlowEngine, compute_calibration
 from nq_agent.main import FeedBinding, run_from_config
 from nq_agent.strategy.tfr import TickFlowRegime
 
@@ -51,6 +50,16 @@ async def main() -> None:
     calibration: dict[str, Any] = json.loads(CALIBRATION.read_text(encoding="utf-8"))
     book: dict[str, Any] = {}
     engine = FlowEngine(calibration, book)
+
+    session = datetime.now(ET).date().isoformat()
+    flow_out = FLOW_STORE / f"{session}.json"
+    if flow_out.exists():
+        # An earlier run today persisted its (partial) record in its finally
+        # block before dying. Preload it so post-restart features see the
+        # morning's minutes instead of computing over truncated windows while
+        # a restored position is being managed on them.
+        engine.preload_session(session, json.loads(flow_out.read_text(encoding="utf-8")))
+        logging.info("preloaded this session's earlier flow record: %s", flow_out)
 
     feed = ReconnectingFeed(
         DatabentoFeed(
@@ -79,10 +88,8 @@ async def main() -> None:
     # The live stream never ends on its own; the session does. Stop at
     # 16:35 ET (cutoff flatten is 16:30, strategy flat since 15:55) so the
     # flow record persists and tomorrow's calibration can run.
-    end_et = datetime.now(ZoneInfo("America/New_York")).replace(
-        hour=16, minute=35, second=0, microsecond=0
-    )
-    remaining = (end_et - datetime.now(ZoneInfo("America/New_York"))).total_seconds()
+    end_et = datetime.now(ET).replace(hour=16, minute=35, second=0, microsecond=0)
+    remaining = (end_et - datetime.now(ET)).total_seconds()
     if remaining <= 0:
         raise SystemExit("started after 16:35 ET; nothing left of today's session")
     try:
@@ -96,19 +103,31 @@ async def main() -> None:
         logging.info("16:35 ET: session over, stopping the stream")
     finally:
         # Persist the session's flow record for calibration + drift audit.
+        # This runs on EVERY exit path, crashes included: a partial record is
+        # what a same-day restart preloads (above), but it must never feed
+        # the calibration -- mark it and let compute_calibration skip it.
         payload = engine.aggregator.session_payload()
         if payload["minutes"]:
-            session = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
+            completed = datetime.now(ET) >= end_et
+            if not completed:
+                payload["partial"] = True
             FLOW_STORE.mkdir(parents=True, exist_ok=True)
-            out = FLOW_STORE / f"{session.isoformat()}.json"
-            out.write_text(json.dumps(payload), encoding="utf-8")
-            print(f"flow record persisted: {out}")
-            from nq_agent.flow import compute_calibration
-
-            CALIBRATION.write_text(
-                json.dumps(compute_calibration(FLOW_STORE), indent=2), encoding="utf-8"
-            )
-            print(f"calibration refreshed for the next session: {CALIBRATION}")
+            flow_out.write_text(json.dumps(payload), encoding="utf-8")
+            print(f"flow record persisted: {flow_out}")
+            if completed:
+                try:
+                    CALIBRATION.write_text(
+                        json.dumps(compute_calibration(FLOW_STORE), indent=2),
+                        encoding="utf-8",
+                    )
+                    print(f"calibration refreshed for the next session: {CALIBRATION}")
+                except Exception:
+                    # Never let a calibration failure replace the exception
+                    # that actually ended the session (this is a finally
+                    # block); the nightly calibrate_flow run is the fallback.
+                    logging.exception(
+                        "calibration refresh failed; run scripts/calibrate_flow.py"
+                    )
 
 
 if __name__ == "__main__":

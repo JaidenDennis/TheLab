@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -67,7 +67,7 @@ class DatabentoFeed(DataFeed):
         symbol: str = "NQ.c.0",
         dataset: str = DEFAULT_DATASET,
         queue_size: int = 10_000,
-        tick_tap: object | None = None,
+        tick_tap: Callable[[Tick], None] | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("a Databento API key is required")
@@ -75,6 +75,13 @@ class DatabentoFeed(DataFeed):
         # engine tapping the stream has finished its bookkeeping by the time
         # the closed bar reaches the strategy. None = no tap (default).
         self._tick_tap = tick_tap
+        # High-water mark of tapped tick timestamps, kept across stream()
+        # calls on this instance: a reconnect replays intraday from the last
+        # DELIVERED bar's close (ReconnectingFeed resumes at bar granularity),
+        # so the ticks between that close and the disconnect arrive again.
+        # Bars are deduped upstream; without this mark the tap would feed the
+        # replayed ticks into the flow minutes a second time.
+        self._tap_high_water: datetime | None = None
         self._api_key = api_key
         self._symbol = symbol
         self._dataset = dataset
@@ -155,6 +162,9 @@ class DatabentoFeed(DataFeed):
         )
 
         aggregator = BarAggregator(symbol, timeframes)
+        # Everything at/before this mark was already tapped by a previous
+        # stream() call and is being replayed for bar-gap repair only.
+        replay_cutoff = self._tap_high_water
         try:
             async for record in live:
                 if isinstance(record, db.ErrorMsg):
@@ -164,8 +174,23 @@ class DatabentoFeed(DataFeed):
                 if not isinstance(record, db.TradeMsg):
                     continue
                 tick = self._to_tick(record, symbol)
-                if self._tick_tap is not None:
-                    self._tick_tap(tick)  # type: ignore[operator]
+                # `>` (not `>=`) skips replayed ticks up to and including the
+                # previous stream's last tapped timestamp; a genuinely new
+                # trade sharing that exact nanosecond is the accepted cost of
+                # not double-counting the whole replay window.
+                if self._tick_tap is not None and (
+                    replay_cutoff is None or tick.ts > replay_cutoff
+                ):
+                    try:
+                        self._tick_tap(tick)
+                    except Exception:
+                        # A tap bug is not a feed disconnect, but the retry
+                        # layer upstream treats any raise here as one; log
+                        # the real cause before it gets relabelled.
+                        logger.exception("tick tap raised; this is not a feed error")
+                        raise
+                    if self._tap_high_water is None or tick.ts > self._tap_high_water:
+                        self._tap_high_water = tick.ts
                 for bar in aggregator.add_tick(tick):
                     yield bar
         finally:

@@ -277,24 +277,26 @@ class TickFlowRegime(Strategy):
         if record is None:
             return None
 
+        # A reversal queued by _manage is good for exactly one evaluated bar:
+        # it must match THIS bar's fresh signal or be forgotten. Left armed
+        # past a bar where the signal faded, a stale intent would silently
+        # drop an unrelated signal much later in the day.
+        reverse_into, self._reverse_into = self._reverse_into, None
         direction = self._entry_direction(record)
         if direction is None:
             return None
-        # A reversal queued by _manage must match the fresh signal, else drop.
-        if self._reverse_into is not None and self._reverse_into != direction:
-            self._reverse_into = None
+        if reverse_into is not None and reverse_into != direction:
             return None
-        self._reverse_into = None
 
         close = Decimal(str(record["close"]))
         if direction == "LONG":
             fill = close + self._tick
-            stop = (fill * (1 - self._cat_frac)).quantize(self._tick)
+            stop = self._round_to_tick(fill * (1 - self._cat_frac))
             target = fill + self._far_target
             side = Direction.LONG
         else:
             fill = close - self._tick
-            stop = (fill * (1 + self._cat_frac)).quantize(self._tick)
+            stop = self._round_to_tick(fill * (1 + self._cat_frac))
             target = fill - self._far_target
             side = Direction.SHORT
 
@@ -324,6 +326,16 @@ class TickFlowRegime(Strategy):
 
     # ----------------------------------------------------------------- entry
 
+    def _round_to_tick(self, value: Decimal) -> Decimal:
+        """Round to the instrument's tick grid.
+
+        NOT `value.quantize(self._tick)`: quantize matches its argument's
+        EXPONENT, so quantize(Decimal("0.25")) rounds to hundredths and
+        produces off-grid prices like ...30.07 -- accepted silently by the
+        dryrun executor, rejected (or re-rounded differently) by a broker.
+        """
+        return (value / self._tick).quantize(Decimal("1")) * self._tick
+
     def _entry_direction(self, record: dict[str, Any]) -> str | None:
         if self._regime_required:
             if record.get("regime") != "AF":
@@ -341,8 +353,11 @@ class TickFlowRegime(Strategy):
         direction = "LONG" if f1 > 0 else "SHORT"
 
         if self._f4_confirm:
-            imbalance = record.get("large_imb") or 0.0
-            if (imbalance > 0) != (f1 > 0):
+            # Missing or exactly-zero large-trade imbalance cannot CONFIRM
+            # either direction -- no entry. (The old `or 0.0` coercion made
+            # an absent field veto every long while passing every short.)
+            imbalance = record.get("large_imb")
+            if imbalance is None or imbalance == 0 or (imbalance > 0) != (f1 > 0):
                 return None
         if self._f3_veto:
             # Absorption against the direction: heavy one-sided aggression
