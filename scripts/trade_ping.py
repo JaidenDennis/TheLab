@@ -4,7 +4,8 @@
 Standalone journal reader -- deliberately outside the engine (the shadow
 declaration pins the engine to dryrun-only execution, so notification lives
 here, not in an executor). Tails var/shadow/journal/<ET-date>.jsonl and fires
-`osascript display notification` for each signal_emitted with intent ENTRY.
+`osascript display notification` for each signal_emitted with intent ENTRY
+and each position_closed (with realised P&L).
 
 Offsets are persisted per journal file so a watcher restart re-pings only
 what was appended while it was down, never the whole day. On first-ever
@@ -38,19 +39,36 @@ def notify(title: str, message: str) -> None:
     subprocess.run(["osascript", "-e", script], check=False, timeout=10)
 
 
-def format_ping(record: dict) -> str:
-    direction = record.get("direction", "?")
-    quantity = record.get("quantity", "?")
-    reason = record.get("reason") or record.get("source") or ""
-    when = ""
+def _when(record: dict) -> str:
     try:
         ts = datetime.fromisoformat(record["ts"])
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        when = ts.astimezone(ET).strftime("%H:%M:%S ET")
+        return ts.astimezone(ET).strftime("%H:%M:%S ET")
     except (KeyError, ValueError):
+        return ""
+
+
+def format_entry(record: dict) -> str:
+    direction = record.get("direction", "?")
+    quantity = record.get("quantity", "?")
+    reason = record.get("reason") or record.get("source") or ""
+    parts = [f"{direction} x{quantity}", _when(record), reason]
+    return " -- ".join(str(p) for p in parts if p)
+
+
+def format_exit(record: dict) -> str:
+    direction = record.get("direction", "?")
+    quantity = record.get("quantity", "?")
+    exit_price = record.get("exit_price", "?")
+    reason = record.get("exit_reason") or ""
+    pnl = ""
+    try:
+        value = float(record["realised_pnl"])
+        pnl = f"P&L {'+' if value >= 0 else '-'}${abs(value):,.2f}"
+    except (KeyError, TypeError, ValueError):
         pass
-    parts = [f"{direction} x{quantity}", when, reason]
+    parts = [f"{direction} x{quantity} out @ {exit_price}", pnl, _when(record), reason]
     return " -- ".join(str(p) for p in parts if p)
 
 
@@ -83,7 +101,10 @@ def drain(journal: Path, offset: int) -> tuple[list[dict], int]:
                 record = json.loads(line)
             except ValueError:
                 continue
-            if record.get("event") == "signal_emitted" and record.get("intent") == "ENTRY":
+            event = record.get("event")
+            if event == "signal_emitted" and record.get("intent") == "ENTRY":
+                entries.append(record)
+            elif event == "position_closed":
                 entries.append(record)
     return entries, offset
 
@@ -102,7 +123,10 @@ def watch(journal_dir: Path, state_path: Path, interval: float) -> None:
             else:
                 entries, new_offset = drain(journal, state[key])
                 for record in entries:
-                    notify("TFR Shadow: trade entered", format_ping(record))
+                    if record.get("event") == "position_closed":
+                        notify("TFR Shadow: trade closed", format_exit(record))
+                    else:
+                        notify("TFR Shadow: trade entered", format_entry(record))
                 if new_offset != state[key]:
                     state = {key: new_offset}
                     save_state(state_path, state)
@@ -121,6 +145,8 @@ def main() -> int:
 
     if args.test:
         notify("TFR Shadow: trade entered", "LONG x1 -- 09:41:00 ET -- test ping")
+        notify("TFR Shadow: trade closed",
+               "LONG x1 out @ 30250.00 -- P&L +$100.00 -- 09:42:00 ET -- test ping")
         return 0
 
     state_path = args.state_file or args.journal_dir / "trade_ping_state.json"
