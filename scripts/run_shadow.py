@@ -78,11 +78,18 @@ async def main() -> None:
 
     # The declared variant, exactly. Changing anything here between the
     # declaration commit and the end of the shadow window voids the gate.
+    #
+    # 2026-08-19: quantity 1 -> 4 MNQ by spec-owner decision, breaking the
+    # sizing freeze -- see the dated amendment in TFR-SHADOW-DECLARATION.md.
+    # Per that amendment the gate clock RESTARTS at the first 4-MNQ session
+    # (2026-08-20); the gate stays per-contract (NQ-equiv EV = realised
+    # dollars x 2.5 at this size).
     strategy = TickFlowRegime(
         decisions=book,
         exit_mode="t13",
         regime_required=False,
         fomc_dates=fomc_dates(),
+        quantity=4,
     )
 
     # The live stream never ends on its own; the session does. Stop at

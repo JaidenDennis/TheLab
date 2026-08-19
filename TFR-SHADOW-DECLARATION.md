@@ -47,3 +47,36 @@ distribution contradicts the ~$100–120/micro high-percentile assumption
 a fatter 13-bar loss tail), this policy is re-decided from the shadow
 data before any funded order. That review is risk operations, not a
 strategy-parameter change.
+
+---
+
+## Amendment — shadow sizing 1 → 4 MNQ (recorded 2026-08-19, spec owner)
+
+**This amendment BREAKS the original sizing freeze**, by explicit
+spec-owner decision made 2026-08-19 with the tradeoffs stated in
+session (a sizing change buys no gate information — the gate is
+per-contract — and voids the original window's admissibility). It is
+recorded rather than hidden:
+
+- **Change:** shadow `quantity` 1 → **4 MNQ**, constant. Effective the
+  next session start (**2026-08-20**); not applied mid-session — the
+  2026-08-19 session, including its open position, completed at 1 MNQ.
+  Entry/exit/caps/backstops and every other declared parameter:
+  unchanged.
+- **Gate clock RESTARTS** at the first 4-MNQ session (2026-08-20):
+  3 months or 60 trades, whichever is longer, from that date. The
+  1-MNQ window (2026-08-14 → 2026-08-19, 5 closed trades, −$201.50
+  net incl. one catastrophic stop) is spent evidence: recorded,
+  reported alongside the new window, usable against the strategy but
+  not for it.
+- **Gate arithmetic, normalized:** the gate stays per-contract
+  NQ-equivalent (EV ≥ +$20/trade NQ-equiv, PF ≥ 1.10). At 4 MNQ,
+  NQ-equiv EV/trade = journal realised dollars × 2.5 (1 NQ = 10 MNQ).
+  PF and the drift audit are size-invariant.
+- **Risk note at this size:** a catastrophic-stop day ≈ $844 (4 ×
+  ~$211/micro) — 18.8% of a $4,500 buffer, above the "under 15%" line
+  that selected 3 micros in the 2026-08-14 funded-sizing addendum. The
+  funded-stage policy (3 micros) is NOT changed by this amendment; if
+  the intent is to fund at 4, that is re-decided at the pre-funding
+  risk review with the shadow's observed loss distribution, per the
+  standing check above.
