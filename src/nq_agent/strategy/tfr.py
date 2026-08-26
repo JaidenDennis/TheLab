@@ -55,7 +55,10 @@ DONE = "done"
 
 # v1.0 modes (regime-based) kept for the record; v1.1 adds the flow-native
 # family: "fd" (flow decay) and "fstack" (fd + hf, whichever fires first).
-EXIT_MODES = ("hf", "ri", "stack", "t13", "fd", "fstack")
+# "bracket" (SSX-V3): no thesis exits and no stop-and-reverse -- the
+# server-side target/stop pair placed at entry is the whole exit model,
+# with only the session flatten (and an optional bar-count backstop) on top.
+EXIT_MODES = ("hf", "ri", "stack", "t13", "fd", "fstack", "bracket")
 
 
 def _dec(value: Any) -> Decimal | None:
@@ -85,6 +88,8 @@ class TickFlowRegime(Strategy):
         f3_veto: bool = False,
         catastrophic_frac: Decimal = Decimal("0.0035"),
         far_target_points: Decimal = Decimal("1000"),
+        target_frac: Decimal | None = None,
+        bracket_backstop_bars: int | None = None,
         max_entries_per_day: int = 3,
         entry_end: time = time(15, 0),
         quantity: int = 1,
@@ -116,6 +121,12 @@ class TickFlowRegime(Strategy):
         self._f3_veto = f3_veto
         self._cat_frac = catastrophic_frac
         self._far_target = far_target_points
+        # SSX-V3: a real (small) profit target, recorded as a FRACTION of
+        # price at spec-lock and rebased on every entry, exactly like the
+        # catastrophic stop -- NAIM's fixed-point erosion is not repeated.
+        # None keeps the far stand-in target ("none") for every other mode.
+        self._target_frac = target_frac
+        self._bracket_backstop = bracket_backstop_bars
         self._max_entries = max_entries_per_day
         self._entry_end = entry_end
         self._quantity = quantity
@@ -292,12 +303,18 @@ class TickFlowRegime(Strategy):
         if direction == "LONG":
             fill = close + self._tick
             stop = self._round_to_tick(fill * (1 - self._cat_frac))
-            target = fill + self._far_target
+            if self._target_frac is not None:
+                target = self._round_to_tick(fill * (1 + self._target_frac))
+            else:
+                target = fill + self._far_target
             side = Direction.LONG
         else:
             fill = close - self._tick
             stop = self._round_to_tick(fill * (1 + self._cat_frac))
-            target = fill - self._far_target
+            if self._target_frac is not None:
+                target = self._round_to_tick(fill * (1 - self._target_frac))
+            else:
+                target = fill - self._far_target
             side = Direction.SHORT
 
         self._state = PENDING
@@ -402,6 +419,22 @@ class TickFlowRegime(Strategy):
                 return self._exit(bar, position.direction, "blackout flatten")
             if et_time >= time(23, 45):
                 return self._exit(bar, position.direction, "midnight flatten", terminal=True)
+
+        if self._exit_mode == "bracket":
+            # SSX-V3: the bracket IS the exit model. No thesis exits, no
+            # stop-and-reverse -- an opposite signal while a position is
+            # open is ignored, not traded. Only the optional bar-count
+            # backstop runs here; target and stop fill server-side.
+            if (
+                self._bracket_backstop is not None
+                and self._bars_held >= self._bracket_backstop
+            ):
+                return self._exit(
+                    bar,
+                    position.direction,
+                    f"time backstop {self._bracket_backstop} bars",
+                )
+            return None
 
         if record is None:
             return None

@@ -31,6 +31,7 @@ from nq_agent.backtest import BacktestReport, run_backtest
 from nq_agent.strategy.tfr import TickFlowRegime
 
 FOMC_PATH = Path("config/fomc_dates.json")
+SPEC_LOCK_PRICE = Decimal("30250")  # NQ at SSX-V3 spec-lock, 2026-08-17
 
 
 def fomc_dates() -> set[date]:
@@ -90,6 +91,29 @@ def build_variants(decisions_dir: Path) -> dict[str, partial[TickFlowRegime]]:
         "fc_fstack_f4": base(exit_mode="fstack", regime_required=False, f4_confirm=True),
         "fc_fstack_f3": base(exit_mode="fstack", regime_required=False, f3_veto=True),
         "fc_fstack_cap5": base(exit_mode="fstack", regime_required=False, max_entries_per_day=5),
+        # ---- SSX-V3 (addendum spec v1.0, pre-declared 2026-08-17): the
+        # small-target / wide-stop harvester on fc_t13 entries. Targets are
+        # FRACTIONS recorded at spec-lock (nominal pts / NQ 30250) and
+        # rebased per entry, same as the catastrophic stop. "bracket" mode
+        # has no thesis exits and no stop-and-reverse -- target, stop and
+        # the 15:55 flatten (plus the T13 cell's 13-bar backstop) are the
+        # whole exit model. Entries are the fc_t13 rule, unchanged.
+        "ssx_v3_20": base(
+            exit_mode="bracket",
+            regime_required=False,
+            target_frac=Decimal("20") / SPEC_LOCK_PRICE,
+        ),
+        "ssx_v3_20_t13": base(
+            exit_mode="bracket",
+            regime_required=False,
+            target_frac=Decimal("20") / SPEC_LOCK_PRICE,
+            bracket_backstop_bars=13,
+        ),
+        "ssx_v3_30": base(
+            exit_mode="bracket",
+            regime_required=False,
+            target_frac=Decimal("30") / SPEC_LOCK_PRICE,
+        ),
     }
 
 
