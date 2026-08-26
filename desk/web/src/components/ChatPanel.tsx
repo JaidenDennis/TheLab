@@ -2,6 +2,8 @@
 
 // The buddy (spec §5): streaming replies, tool calls collapsed under each
 // answer, stale warnings visible, commands passed straight through.
+// Turns persist to localStorage so the conversation survives reloads;
+// the component itself stays mounted across tabs (see ChatDock).
 
 import { useEffect, useRef, useState } from "react";
 
@@ -21,15 +23,36 @@ interface Turn {
 }
 
 const COMMANDS = "/watch /unwatch /mute /remember /confirm /note /status";
+const STORE_KEY = "desk-chat-turns";
+const STORE_MAX = 200;
 
 export function ChatPanel() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const bottom = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const hydrated = useRef(false);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
+    try {
+      const saved = localStorage.getItem(STORE_KEY);
+      if (saved) setTurns(JSON.parse(saved));
+    } catch {
+      /* fresh start */
+    }
+    hydrated.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated.current) return;
+    try {
+      const done = turns.slice(-STORE_MAX).map((t) => ({ ...t, streaming: false }));
+      localStorage.setItem(STORE_KEY, JSON.stringify(done));
+    } catch {
+      /* storage full or unavailable */
+    }
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
   const send = async () => {
@@ -102,23 +125,23 @@ export function ChatPanel() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "70vh" }}>
-      <div style={{ flex: 1 }}>
+    <div className="chat">
+      <div className="chat-scroll" ref={scroller}>
         {turns.length === 0 && (
           <p className="muted">
-            Ask anything grounded in the desk&rsquo;s data. Commands: {COMMANDS}
+            Ask anything grounded in the desk&rsquo;s data. Commands: <span className="mono">{COMMANDS}</span>
           </p>
         )}
         {turns.map((t, i) => (
-          <div key={i} className="card" style={t.role === "user" ? { background: "transparent" } : undefined}>
-            <div className="muted" style={{ fontSize: "0.75rem" }}>
+          <div key={i} className={"chat-turn " + t.role}>
+            <div className="chat-who">
               {t.role === "user" ? "you" : "buddy"}
               {t.opinion && <span className="pill" style={{ marginLeft: 6 }}>opinion: {t.opinion} · logged</span>}
             </div>
-            <div style={{ whiteSpace: "pre-wrap" }}>{t.text || (t.streaming ? "…" : "")}</div>
+            <div className="chat-body">{t.text || (t.streaming ? "…" : "")}</div>
             {t.tools && t.tools.length > 0 && (
-              <details style={{ marginTop: 6 }}>
-                <summary className="muted" style={{ cursor: "pointer", fontSize: "0.8rem" }}>
+              <details style={{ marginTop: 4 }}>
+                <summary className="muted" style={{ cursor: "pointer", fontSize: "0.78rem" }}>
                   {t.tools.length} tool call{t.tools.length === 1 ? "" : "s"}
                 </summary>
                 <div style={{ marginTop: 4 }}>
@@ -134,9 +157,8 @@ export function ChatPanel() {
             )}
           </div>
         ))}
-        <div ref={bottom} />
       </div>
-      <div style={{ position: "sticky", bottom: 0, background: "var(--bg)", paddingTop: 8 }}>
+      <div className="chat-input">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -147,7 +169,6 @@ export function ChatPanel() {
             }
           }}
           placeholder={busy ? "thinking…" : "message the buddy"}
-          style={{ minHeight: 48 }}
         />
         <button onClick={() => void send()} disabled={busy || !input.trim()}>
           Send

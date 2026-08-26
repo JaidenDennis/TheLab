@@ -1,25 +1,38 @@
+/* Trading Desk — night-desk theme.
+   Numbers are the content of a journal, so the mono face carries identity
+   (--font-mono, tabular numerals); Archivo (--font-ui) does headings and UI.
+   Amber is the accent on purpose: green/red stay reserved for P&L. */
+
 :root {
-  --bg: #ffffff;
-  --fg: #16181d;
-  --muted: #667085;
-  --line: #e4e7ec;
-  --card: #f8fafc;
-  --accent: #2456d6;
-  --green: #067647;
-  --red: #b42318;
-  --warn: #b54708;
+  --bg: #f6f5f1;
+  --panel: #ffffff;
+  --ink: #1a1d26;
+  --muted: #6d7484;
+  --line: #e4e2da;
+  --accent: #a4761f;
+  --accent-soft: #f3e8d2;
+  --green: #117a53;
+  --green-wash: rgba(17, 122, 83, 0.09);
+  --red: #c03434;
+  --red-wash: rgba(192, 52, 52, 0.08);
+  --warn: #a05a18;
+  --shadow: 0 1px 2px rgba(20, 22, 30, 0.06), 0 8px 24px -18px rgba(20, 22, 30, 0.25);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #101215;
-    --fg: #e6e8ec;
-    --muted: #98a2b3;
-    --line: #2b3038;
-    --card: #181b20;
-    --accent: #7ba0f4;
-    --green: #4cc38a;
-    --red: #f97066;
+    --bg: #0c0f15;
+    --panel: #131824;
+    --ink: #e9ecf2;
+    --muted: #8b94a8;
+    --line: #222a3a;
+    --accent: #e4a94f;
+    --accent-soft: #2a2415;
+    --green: #3fce8e;
+    --green-wash: rgba(63, 206, 142, 0.09);
+    --red: #f26d6d;
+    --red-wash: rgba(242, 109, 109, 0.09);
     --warn: #f7b27a;
+    --shadow: none;
   }
 }
 
@@ -27,69 +40,250 @@
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
-  color: var(--fg);
-  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  font: 15px/1.55 var(--font-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
 }
-main { max-width: 720px; margin: 0 auto; padding: 12px 14px 80px; }
+code, .mono, td.num, th.num, .tape {
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+}
 a { color: var(--accent); text-decoration: none; }
-h1 { font-size: 1.2rem; margin: 12px 0 8px; }
-h2 { font-size: 1rem; margin: 16px 0 6px; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
+h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.015em; margin: 18px 0 10px; }
+h2 { font-size: 0.98rem; font-weight: 650; letter-spacing: -0.01em; margin: 18px 0 8px; }
+
+/* Order-ticket style field label: mono, uppercase, letterspaced. */
+.eyebrow, label, th {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+/* ---------- shell: content column + persistent chat rail ---------- */
+.shell { display: grid; grid-template-columns: minmax(0, 1fr); }
+main { width: 100%; max-width: 780px; margin: 0 auto; padding: 8px 16px 96px; }
+.chatdock-rail { display: none; }
+@media (min-width: 1120px) {
+  .shell { grid-template-columns: minmax(0, 1fr) 400px; }
+  .chatdock-rail, .chatdock-sheet {
+    display: flex; flex-direction: column;
+    position: sticky; inset: auto; top: 0; height: 100vh;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    padding-top: 0;
+  }
+  .chatdock-fab { display: none; }
+  .chatdock-sheet .chat-rail-head button { display: none; }
+}
+
+/* ---------- top bar ---------- */
 nav.topnav {
-  position: sticky; top: 0; z-index: 10;
-  display: flex; gap: 4px;
-  background: var(--bg);
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: 2px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
-  padding: 6px 8px;
+  padding: 0 14px;
+  height: 52px;
 }
-nav.topnav a {
-  flex: 1; text-align: center; padding: 10px 0;
-  border-radius: 8px; color: var(--muted); font-weight: 600;
+.wordmark {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem; font-weight: 600;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--accent);
+  margin-right: 18px; user-select: none;
 }
-nav.topnav a.active { color: var(--fg); background: var(--card); }
+nav.topnav a.tab {
+  padding: 6px 14px; border-radius: 999px;
+  color: var(--muted); font-weight: 600; font-size: 0.9rem;
+}
+nav.topnav a.tab:hover { text-decoration: none; color: var(--ink); }
+nav.topnav a.tab.active { color: var(--ink); background: var(--accent-soft); }
 
+/* ---------- cards, pills, tables ---------- */
 .card {
-  background: var(--card);
+  background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px;
-  margin: 10px 0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 12px 0;
+  box-shadow: var(--shadow);
 }
+.card > h2:first-child { margin-top: 0; }
 .muted { color: var(--muted); font-size: 0.85rem; }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
 .warn { color: var(--warn); }
 
-label { display: block; font-size: 0.85rem; color: var(--muted); margin: 10px 0 2px; }
-input[type="text"], input[type="email"], input[type="number"], textarea, select {
-  width: 100%; padding: 10px; font-size: 1rem;
-  background: var(--bg); color: var(--fg);
+label { display: block; margin: 12px 0 4px; }
+input[type="text"], input[type="email"], input[type="number"],
+input[type="date"], input[type="time"], textarea, select {
+  width: 100%; padding: 9px 11px; font-size: 0.95rem;
+  font-family: inherit;
+  background: var(--bg); color: var(--ink);
   border: 1px solid var(--line); border-radius: 8px;
+}
+input[type="number"], input[type="date"], input[type="time"] {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
 }
 textarea { min-height: 72px; resize: vertical; }
 button {
-  padding: 10px 16px; font-size: 1rem; font-weight: 600;
-  background: var(--accent); color: #fff;
+  padding: 9px 16px; font-size: 0.92rem; font-weight: 650;
+  font-family: inherit;
+  background: var(--accent); color: var(--bg);
   border: 0; border-radius: 8px; cursor: pointer;
   margin-top: 10px;
+  transition: filter 120ms ease;
 }
-button:disabled { opacity: 0.45; cursor: default; }
-button.secondary { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button.ghost { background: transparent; color: var(--muted); border: 0; padding: 4px 8px; margin: 0; }
 
-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
-th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; }
+td.num { font-size: 0.88rem; }
 
 .dropzone {
-  border: 2px dashed var(--line); border-radius: 10px;
+  border: 1.5px dashed var(--line); border-radius: 12px;
   padding: 36px 12px; text-align: center; color: var(--muted);
   margin: 12px 0;
 }
-.dropzone.over { border-color: var(--accent); color: var(--fg); }
+.dropzone.over { border-color: var(--accent); color: var(--ink); }
 ul.plain { list-style: none; padding: 0; margin: 8px 0; }
-ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+ul.plain li { padding: 7px 0; border-bottom: 1px solid var(--line); }
+ul.plain li:last-child { border-bottom: 0; }
 .pill {
-  display: inline-block; padding: 1px 8px; border-radius: 999px;
-  border: 1px solid var(--line); font-size: 0.75rem; color: var(--muted);
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  border: 1px solid var(--line); font-size: 0.72rem; color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* ---------- P&L calendar (signature) ---------- */
+.cal { margin: 12px 0; }
+.cal-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.cal-title {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95rem; font-weight: 600; letter-spacing: 0.04em;
+}
+.cal-nav a { padding: 2px 10px; color: var(--muted); font-family: var(--font-mono, monospace); }
+.cal-nav a:hover { color: var(--accent); text-decoration: none; }
+.cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+}
+.cal-dow {
+  text-align: center; padding-bottom: 2px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.cal-day {
+  position: relative;
+  min-height: 58px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel);
+  padding: 5px 6px;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+.cal-day.out { visibility: hidden; }
+.cal-day.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cal-day.win { background: var(--green-wash); }
+.cal-day.loss { background: var(--red-wash); }
+.cal-num {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.68rem; color: var(--muted);
+}
+.cal-pnl {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem; font-weight: 600;
+  align-self: flex-end;
+}
+.cal-add {
+  position: absolute; top: 3px; right: 3px;
+  width: 18px; height: 18px; line-height: 16px;
+  padding: 0; margin: 0; border-radius: 5px;
+  background: transparent; color: var(--muted);
+  border: 0; font-size: 0.85rem; cursor: pointer;
+  opacity: 0; transition: opacity 100ms ease;
+}
+.cal-day:hover .cal-add, .cal-add:focus-visible { opacity: 1; }
+.cal-add:hover { color: var(--accent); background: var(--accent-soft); filter: none; }
+@media (hover: none) { .cal-add { opacity: 0.55; } }
+
+/* ---------- modal (manual trade) ---------- */
+.modal-back {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(8, 10, 15, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.modal {
+  width: 100%; max-width: 430px; max-height: 90vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 18px 20px 20px;
+}
+.modal h2 { margin-top: 0; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+
+/* ---------- chat ---------- */
+.chat {
+  display: flex; flex-direction: column;
+  height: 100%; min-height: 0;
+}
+.chat-scroll { flex: 1; overflow-y: auto; padding: 14px 14px 4px; min-height: 0; }
+.chat-turn { margin-bottom: 12px; }
+.chat-who {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--muted); margin-bottom: 2px;
+}
+.chat-turn.user .chat-who { color: var(--accent); }
+.chat-body { white-space: pre-wrap; font-size: 0.92rem; }
+.chat-turn.user .chat-body { color: var(--muted); }
+.chat-input {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px 12px;
+  background: var(--panel);
+  display: flex; gap: 8px; align-items: flex-end;
+}
+.chat-input textarea { min-height: 44px; max-height: 140px; flex: 1; }
+.chat-input button { margin-top: 0; padding: 9px 14px; }
+.chat-rail-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+}
+
+/* mobile: floating button + sheet */
+.chatdock-fab {
+  position: fixed; right: 16px; bottom: 18px; z-index: 40;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: var(--accent); color: var(--bg);
+  border: 0; cursor: pointer; margin: 0;
+  font-size: 1.25rem; line-height: 1;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.chatdock-sheet {
+  position: fixed; inset: 0; z-index: 45;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+}
+.chatdock-sheet .chat { flex: 1; }
+.hidden { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }

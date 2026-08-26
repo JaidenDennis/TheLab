@@ -1,10 +1,6 @@
-import { ChatPanel } from "@/components/ChatPanel";
+import { redirect } from "next/navigation";
 
+// Chat lives in the persistent dock (ChatDock in the root layout) now.
 export default function ChatPage() {
-  return (
-    <>
-      <h1>Chat</h1>
-      <ChatPanel />
-    </>
-  );
+  redirect("/today");
 }
