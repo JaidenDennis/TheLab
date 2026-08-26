@@ -49,6 +49,14 @@ class Settings(BaseSettings):
         return self.repo_root / "desk" / "factors.yaml"
 
     @property
+    def signals_path(self) -> Path:
+        return self.repo_root / "desk" / "signals.yaml"
+
+    @property
+    def voice_path(self) -> Path:
+        return self.repo_root / "desk" / "voice.yaml"
+
+    @property
     def tradovate_base(self) -> str:
         host = "live" if self.tradovate_env == "live" else "demo"
         return f"https://{host}.tradovateapi.com/v1"

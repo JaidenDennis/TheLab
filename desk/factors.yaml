@@ -3,8 +3,10 @@
 # editing this file; the brain loads it at startup and the replay harness
 # asserts agent answers label factors to match.
 #
-# tag: validated    — a repo study justifies it; cite the study.
-# tag: discretionary — framework, not tested edge. The buddy must say so.
+# tag: validated       — a repo study justifies it; cite the study.
+# tag: discretionary   — framework, not tested edge. The buddy must say so.
+# tag: tested-negative — a repo study looked and found NO edge; the buddy must
+#                        never present it as a reason to act.
 
 factors:
   - key: flow_impulse_qrank
@@ -44,3 +46,15 @@ factors:
   - key: day_type_classifier
     name: Day-type classifier
     tag: discretionary
+
+  - key: sweep_entry
+    name: Sweep entry (sweep + reclaim as an entry signal)
+    tag: tested-negative
+    study: SFB
+    note: Sweep entries carry no edge; sweeps are context, never a reason to enter.
+
+  - key: flow_confirms_sweep
+    name: Flow verdict on sweep entries
+    tag: tested-negative
+    study: SFB flow-verdict pass
+    note: Adding the flow verdict to sweep entries added nothing; "flow confirms the sweep" is not a thing the buddy says.

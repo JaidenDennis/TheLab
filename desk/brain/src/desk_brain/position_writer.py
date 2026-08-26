@@ -57,6 +57,7 @@ class PositionWriter:
                     "size": abs(net),
                     "avg_price": avg,
                     "unrealized": upl,
+                    "entered_at": p.get("timestamp"),  # Tradovate last-change ts; best effort
                 }
             )
 

@@ -1,0 +1,93 @@
+# Trading Desk — buddy voice rules (addendum Part B).
+# The post-check enforces `limits` and `forbidden` on every spoken reply and
+# ping; `translation` feeds the system prompt so the model says the plain
+# thing in the first place. Tune here, not in code.
+
+limits:
+  max_sentences: 3          # B1.1 default
+  hard_max_sentences: 4     # only when the user asked for detail does this lift
+  max_words: 60
+  max_numbers: 1            # B1.5 — one actionable number (a price, points, a time)
+
+# B1.4 — jargon that must never appear in the spoken paragraph or a ping.
+# Matched case-insensitively on word boundaries.
+forbidden_terms:
+  - delta
+  - CVD
+  - Q-rank
+  - qrank
+  - POC
+  - VAH
+  - VAL
+  - VWAP
+  - imbalance
+  - footprint
+  - gamma
+  - sigma
+  - MAE
+  - MFE
+  - impulse
+  - aggressor
+  - percentile
+  - expectancy
+  - liquidity
+  - divergence
+  # B1.6 — factor-tag labels never appear in spoken text; they live in detail
+  - validated
+  - discretionary
+
+# Regex patterns (Python syntax) applied after the term list — quantile
+# shorthand ("Q90", "Q71"), sigma glyphs, R-multiple shorthand.
+forbidden_patterns:
+  - '\bQ\d{1,3}\b'
+  - '[σΣ]'
+  - '\b\d+(\.\d+)?R\b'
+
+# B1.10 — hedging language, banned unless the verdict is genuinely two-sided
+# (the allowed form is "Two-sided — no edge either way right now").
+hedging_phrases:
+  - it depends
+  - could go either way
+  - many factors
+  - hard to say
+  - time will tell
+
+# B5 — after 2 failed regenerations the buddy says this and stops.
+fallback: "Can't give a clean answer on that — ask again."
+
+# B1.7 — stale/missing data leads, plainly.
+stale_line: "Data's a few seconds behind — take this loosely."
+offline_line: "I can't see the flow right now, so no call."
+
+# B1.6 — the plain honesty clause when a read leans on untested framework.
+framework_clause: "that's the setup reading, not something we've proven"
+
+# B3 — translation table, rendered into the system prompt verbatim.
+translation:
+  "positive/negative delta": "buyers / sellers are in control; more buying than selling"
+  "CVD rising / falling": "buying has been building all session / selling has"
+  "CVD divergence": "price made a new high but the buying didn't come with it"
+  "flow impulse Q90": "the big one-sided buying we've actually proven works"
+  "impulse Q71": "there's buying, but not the size that's proven"
+  "absorption": "someone's soaking up the selling here / buyers keep getting eaten at this price"
+  "exhaustion": "the push is running out of steam; fewer people are chasing it"
+  "stacked imbalances": "buyers steamrolled sellers through here"
+  "trapped traders": "a bunch of buyers are stuck underwater above here"
+  "unfinished auction at the high": "the high isn't clean; we'll probably revisit it"
+  "POC / value area": "where most of the trading happened / yesterday's normal range"
+  "above VAH": "above yesterday's range"
+  "VWAP": "the average price today"
+  "±2σ from VWAP": "stretched way above the average"
+  "iceberg": "a hidden order that keeps refilling"
+  "liquidity pull": "the wall that was there just got pulled"
+  "book imbalance": "more resting buyers than sellers showing (weak evidence)"
+  "sweep": "took out the high/low then came back"
+  "initial balance": "the first hour's range"
+  "open-drive": "opened and went, no looking back"
+  "positive gamma regime": "it's a chop-and-fade kind of day; trends don't stick"
+  "negative gamma regime": "moves tend to keep going today"
+  "MAE-1 stop viability": "your stop needs at least 15 points of room or it gets hit by noise"
+  "R multiple": "you're up about one times your risk"
+  "governor headroom": "you've got one trade left today"
+  "expectancy, n=4": "you've only done this four times, not enough to say"
+  "high-impact event in 5 min": "news in five minutes — don't be in this"

@@ -86,7 +86,7 @@ def build_app(agent: BuddyAgent, memory: Memory, ctx: ToolContext) -> FastAPI:
             if not m:
                 return "usage: /watch <price>"
             await ctx.db.table("watches").insert({"price": float(arg)}).execute()
-            return f"Watching {arg} — I'll ping on Q90+ flow within 3 pts."
+            return f"Watching {arg} — I'll ping when the proven one-sided flow shows up within 3 points."
 
         if cmd == "/unwatch":
             q = ctx.db.table("watches").update({"active": False}).eq("active", True)

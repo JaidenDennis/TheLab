@@ -17,7 +17,7 @@ import yaml
 class Factor:
     key: str
     name: str
-    tag: str  # "validated" | "discretionary"
+    tag: str  # "validated" | "discretionary" | "tested-negative"
     study: str | None = None
     note: str | None = None
 
@@ -33,7 +33,7 @@ def load_factors(path: Path) -> dict[str, Factor]:
             study=f.get("study"),
             note=f.get("note"),
         )
-        if factor.tag not in ("validated", "discretionary"):
+        if factor.tag not in ("validated", "discretionary", "tested-negative"):
             raise ValueError(f"factor {factor.key}: bad tag {factor.tag!r}")
         out[factor.key] = factor
     return out
@@ -49,4 +49,9 @@ def factor_legend(factors: dict[str, Factor]) -> str:
     for f in factors.values():
         if f.tag == "discretionary":
             lines.append(f"- {f.name}")
+    negatives = [f for f in factors.values() if f.tag == "tested-negative"]
+    if negatives:
+        lines.append("TESTED NEGATIVE (a study looked and found no edge — never a reason to act):")
+        for f in negatives:
+            lines.append(f"- {f.name} [{f.study}]" + (f" — {f.note}" if f.note else ""))
     return "\n".join(lines)

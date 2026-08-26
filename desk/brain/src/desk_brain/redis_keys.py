@@ -21,6 +21,8 @@ BARS_15M = "desk:bars:15m"
 LEVELS = "desk:levels"  # pdh/pdl, pwh/pwl, 4h swings, on h/l, gamma walls, statuses
 REGIME = "desk:regime"  # gamma sign/magnitude, rv vs iv, day-type probs
 POSITION = "desk:position"  # side, size, avg, upl, working orders, headroom
+TAPE = "desk:tape"  # live tick-window read: speed, large prints, delta rate, absorption
+DAILY = "desk:daily"  # bootstrap daily aggregates: OHLC rows, ATR, IB/ON range history
 VBP_PREFIX = "desk:vbp:"  # per-minute volume-by-price hash, key suffix = epoch minute
 VBP_TTL_S = 3 * 3600
 

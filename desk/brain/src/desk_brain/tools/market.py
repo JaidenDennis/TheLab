@@ -155,6 +155,42 @@ async def footprint_at_level(ctx: ToolContext, args: dict[str, Any]) -> Any:
     }
 
 
+async def read_vbp_minutes(ctx: ToolContext, first_min: int, last_min: int) -> list[dict[float, dict[str, float]]]:
+    """Per-minute footprint cells from the engine's VBP hashes, oldest first.
+    Shared by the footprint tool and the composite reads."""
+    out: list[dict[float, dict[str, float]]] = []
+    for m in range(first_min, last_min + 1):
+        h = await ctx.redis.hgetall(f"{rk.VBP_PREFIX}{m}")
+        cells: dict[float, dict[str, float]] = {}
+        for price_raw, packed in (h or {}).items():
+            price = float(price_raw if isinstance(price_raw, str) else price_raw.decode())
+            if isinstance(packed, bytes):
+                packed = packed.decode()
+            b, s, mx = (float(x) for x in packed.split(","))
+            cells[price] = {"buy": b, "sell": s, "max_print": mx}
+        out.append(cells)
+    return out
+
+
+@tool(
+    "tape",
+    {
+        "description": (
+            "Live tape read from the last few minutes of raw prints: tape speed (and "
+            "whether it's a session-percentile spike), delta rate over 10/30/60s, large "
+            "prints and same-side clusters, print-size shift vs session median, and "
+            "absorption at the current price if any. Refreshed every second."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+)
+async def tape(ctx: ToolContext, args: dict[str, Any]) -> Any:
+    doc = await rk.read_json(ctx.redis, rk.TAPE)
+    if doc is None:
+        raise RuntimeError("no tape in store — engine has not written yet")
+    return doc
+
+
 @tool(
     "levels",
     {

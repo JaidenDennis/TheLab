@@ -20,9 +20,14 @@ from nq_agent.models import Bar, Tick
 from redis.asyncio import Redis
 
 from .. import redis_keys as rk
+from ..tools.signals import behavior as behavior_sig
+from ..tools.signals import flow as flow_sig
+from ..tools.signals import pct_rank
+from ..tools.signals import tape as tape_sig
 from .levels import LevelBook
 from .pricebins import PriceBinAggregator, value_area
 from .qrank import QRank
+from .tickwindow import TickWindow
 
 log = logging.getLogger(__name__)
 
@@ -38,14 +43,23 @@ BAR_SPANS = {"1m": 1, "5m": 5, "15m": 15}
 
 
 class DeskStateEngine:
-    def __init__(self, redis: Redis, qrank: QRank, level_book: LevelBook, regime_doc: dict[str, Any]):
+    def __init__(
+        self,
+        redis: Redis,
+        qrank: QRank,
+        level_book: LevelBook,
+        regime_doc: dict[str, Any],
+        signal_params: dict[str, Any] | None = None,
+    ):
         self._redis = redis
         self._qrank = qrank
         self._book = level_book
         self._regime = dict(regime_doc)
+        self._params = signal_params
 
         self.flow = MinuteFlowAggregator(full_day=True)
         self.bins = PriceBinAggregator()
+        self.tickwin = TickWindow()
 
         self.last: float | None = None
         self.last_tick_at: datetime | None = None
@@ -62,6 +76,7 @@ class DeskStateEngine:
     def tap(self, tick: Tick) -> None:
         self.flow.on_tick(tick)
         self.bins.on_tick(tick)
+        self.tickwin.on_tick(tick)
         price = float(tick.price)
         self.last = price
         self.last_tick_at = tick.ts
@@ -159,6 +174,7 @@ class DeskStateEngine:
             rk.MARKET_STATE,
             {
                 "last": self.last,
+                "rth_open": self.rth_open_price,
                 "session_high": self.session_high,
                 "session_low": self.session_low,
                 "on_high": self._book.on_high,
@@ -175,6 +191,48 @@ class DeskStateEngine:
 
     async def write_market_state_now(self) -> None:
         await self._write_market_state()
+
+    async def write_tape_now(self) -> None:
+        """1s tape read from the live tick window (addendum A1.5, A3.1, A4.x).
+        No-op until signal params are provided (tests construct without them)."""
+        if not self._params:
+            return
+        p, b, f = self._params["tape"], self._params["behavior"], self._params["flow"]
+        now_s = datetime.now(timezone.utc).timestamp()
+        ticks = self.tickwin.snapshot()
+        speed = tape_sig.tape_speed(ticks, now_s, p["speed_window_s"])
+        self.tickwin.sample_speed(speed)
+        absorption = None
+        if self.last is not None:
+            absorption = behavior_sig.absorption(
+                ticks, now_s, self.last,
+                b["absorption_band_ticks"], b["absorption_min_vol"],
+                b["absorption_window_s"], b["absorption_max_range_ticks"],
+            )
+            if absorption:
+                self.tickwin.note_absorption(absorption["raw_score"])
+                absorption["score_pctile"] = pct_rank(list(self.tickwin.absorption_scores), absorption["raw_score"])
+        await rk.write_json(
+            self._redis,
+            rk.TAPE,
+            {
+                "speed_per_s": speed,
+                "speed_spike": tape_sig.is_speed_spike(
+                    speed, list(self.tickwin.speed_samples), p["speed_spike_pctile"]
+                ),
+                "delta_rate": flow_sig.delta_rate(ticks, now_s, f["delta_rate_windows_s"]),
+                "large_prints": tape_sig.large_prints(ticks, p["large_print_nq"]),
+                "print_clusters": tape_sig.print_clusters(
+                    ticks, p["large_print_nq"], p["cluster_min_prints"],
+                    p["cluster_window_s"], p["cluster_band_ticks"],
+                ),
+                "print_size_shift": tape_sig.print_size_shift(
+                    ticks, now_s, p["size_shift_window_s"], self.tickwin.session_median_print()
+                ),
+                "absorption_at_last": absorption,
+                **self.tickwin.stats(),
+            },
+        )
 
     async def _write_levels(self) -> None:
         await rk.write_json(

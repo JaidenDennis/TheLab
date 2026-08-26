@@ -20,6 +20,7 @@ interface Turn {
   streaming?: boolean;
   stale?: boolean;
   opinion?: string | null;
+  detail?: Record<string, unknown> | null;
 }
 
 const COMMANDS = "/watch /unwatch /mute /remember /confirm /note /status";
@@ -112,6 +113,7 @@ export function ChatPanel() {
               streaming: false,
               stale: !!event.stale,
               opinion: (event.opinion as string) ?? null,
+              detail: (event.detail as Record<string, unknown>) ?? null,
             }));
           }
         }
@@ -139,6 +141,16 @@ export function ChatPanel() {
               {t.opinion && <span className="pill" style={{ marginLeft: 6 }}>opinion: {t.opinion} · logged</span>}
             </div>
             <div className="chat-body">{t.text || (t.streaming ? "…" : "")}</div>
+            {t.detail && (
+              <details style={{ marginTop: 4 }}>
+                <summary className="muted" style={{ cursor: "pointer", fontSize: "0.78rem" }}>
+                  detail
+                </summary>
+                <pre className="mono" style={{ marginTop: 4, fontSize: "0.72rem", whiteSpace: "pre-wrap", overflowX: "auto" }}>
+                  {JSON.stringify(t.detail, null, 2)}
+                </pre>
+              </details>
+            )}
             {t.tools && t.tools.length > 0 && (
               <details style={{ marginTop: 4 }}>
                 <summary className="muted" style={{ cursor: "pointer", fontSize: "0.78rem" }}>

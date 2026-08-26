@@ -28,6 +28,7 @@ class ToolContext:
     db: AsyncClient
     settings: Settings
     factors: dict[str, Factor]
+    params: dict[str, Any] | None = None  # desk/signals.yaml, loaded at startup
 
 
 Handler = Callable[[ToolContext, dict[str, Any]], Awaitable[Any]]

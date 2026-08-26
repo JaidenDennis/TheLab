@@ -159,12 +159,12 @@ class Watcher:
         data = result["data"]
         await self._db.table("sessions").update({"day_read_json": data}).eq("session_date", day).execute()
         await self._redis.set(LAST_DAY_READ_KEY, data.get("lean") or "no bias")
-        lines = [f"09:20 day read: {data.get('lean', '?').upper()}"]
+        body = f"09:20 read: {data.get('lean', '?')}"
         if data.get("flip_condition"):
-            lines.append(data["flip_condition"])
+            body += f" — {data['flip_condition']}"
         if result.get("stale"):
-            lines.insert(0, "⚠️ stale engine data")
-        await self.ping("pre_open_read", "\n".join(lines))
+            body = "Data's a few seconds behind — take this loosely. " + body
+        await self.ping("pre_open_read", body)
 
     async def _close_summary(self, day: str) -> None:
         trades = await self._db.table("trades").select("net_pnl").eq("session_date", day).execute()
@@ -206,7 +206,7 @@ class Watcher:
         res = await self._db.table("checklist_entries").select("id", count="exact").eq("session_date", day).execute()
         taken = res.count or 0
         if taken == 1:
-            await self.ping("governor", "Risk governor: 1 trade left today.")
+            await self.ping("governor", "You've got one trade left today.")
 
     # -- engine-event triggers ----------------------------------------------
 
@@ -231,7 +231,7 @@ class Watcher:
         if lean != last:
             await self._redis.set(LAST_DAY_READ_KEY, lean)
             flip = result["data"].get("flip_condition") or ""
-            await self.ping("bias_flip", f"Day read flipped: {last} → {lean.upper()}. {flip}")
+            await self.ping("bias_flip", f"Day read flipped: was {last}, now {lean}. {flip}".strip())
 
     async def _check_stop_proximity(self) -> None:
         pos = await rk.read_json(self._redis, rk.POSITION)
@@ -249,8 +249,8 @@ class Watcher:
                 if dist <= 5:
                     await self.ping(
                         "stop_proximity",
-                        f"{p['contract']} {p['side']} {p['size']}: {dist:.2f} pts from your stop ({o['price']}). "
-                        f"Decide now, not at the touch: honor it, or flatten first — never widen it.",
+                        f"{p['contract']} {p['side']}: price is almost at your stop ({o['price']}) — "
+                        f"decide now, honor it or flatten, never widen it.",
                     )
                     return
 
@@ -265,7 +265,8 @@ class Watcher:
                 result = await run_tool(self._ctx, "level_read", {"price": float(w["price"])})
                 if result.get("ok"):
                     d = result["data"]
+                    lean = d.get("lean") or "no view"
                     await self.ping(
                         "flow_at_watch",
-                        f"Flow Q{q:.0f} at your watched {w['price']}: lean {d.get('lean')} — {d.get('reason')}",
+                        f"The big one-sided flow we've proven just hit near your watched {w['price']} — lean {lean}.",
                     )

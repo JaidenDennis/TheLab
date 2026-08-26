@@ -1,0 +1,93 @@
+# Trading Desk — signal parameters (addendum Part A).
+# Every `[p]` parameter from the signal catalog lives here so it can be tuned
+# without code changes. The brain loads this at startup; pure functions in
+# brain/src/desk_brain/tools/signals/ take these as arguments — no signal
+# hardcodes a tunable.
+#
+# Tags live in factors.yaml, not here. This file is only numbers.
+
+flow:
+  delta_rate_windows_s: [10, 30, 60]   # A1.5 delta per second windows
+  cvd_divergence_bars: 15              # A1.8 lookback for price-vs-CVD divergence
+  cvd_slope_bars: 10                   # A1.9 regression window
+
+footprint:
+  diagonal_imbalance_ratio: 3.0        # A2.2 ask(p) / bid(p - tick)
+  stacked_imbalance_min: 3             # A2.3 consecutive imbalances
+  hvn_mult: 2.0                        # A2.8 volume > mult x bar mean
+  lvn_mult: 0.3                        # A2.9 volume < mult x bar mean
+  tick: 0.25
+
+behavior:
+  absorption_band_ticks: 2             # A3.1 price band width
+  absorption_min_vol: 200              # A3.1 one-sided aggressor contracts in window
+  absorption_window_s: 30              # A3.1
+  absorption_max_range_ticks: 2        # A3.1
+  exhaustion_falling_bars: 3           # A3.3 bars of falling vol-per-tick progress
+  exhaustion_final_vol_mult: 0.5       # A3.3 last bar volume < mult x mean
+  trapped_confirm_bars: 3              # A3.6 close-beyond window after a stack
+  fb_beyond_ticks: 2                   # A3.7 failed breakout: excursion beyond level
+  fb_return_bars: 2                    # A3.7 bars to close back inside
+  reversal_delta_mult: 1.5             # A3.8 next-bar delta vs sweep-bar delta
+  continuation_delta_mult: 0.5         # A3.9 retest delta vs break-bar delta
+
+tape:
+  large_print_nq: 25                   # A4.1 contracts
+  large_print_mnq: 100
+  cluster_min_prints: 3                # A4.2
+  cluster_window_s: 10
+  cluster_band_ticks: 2
+  speed_window_s: 5                    # A4.3 prints/sec window
+  speed_spike_pctile: 95               # A4.4
+  aggression_window_s: 60              # A4.5
+  size_shift_window_s: 60              # A4.6 median print size vs session
+
+depth:                                 # A5 — weak evidence; never sole basis
+  book_top_levels: 5                   # A5.1
+  pull_drop_frac: 0.60                 # A5.3 size drop without fills
+  pull_window_s: 2
+  add_mult: 2.0                        # A5.4 size growth
+  add_window_s: 5
+  iceberg_fill_mult: 3.0               # A5.5 prints vs displayed size
+  spoof_approach_ticks: 2              # A5.6
+  vacuum_band_ticks: 5                 # A5.7
+  vacuum_pctile: 10
+
+profile:
+  value_area_pct: 0.70                 # A6.1/6.2
+  composite_days: [5, 20]              # A6.6
+  acceptance_min_bars: 3               # A6.8 bars beyond a level = accepted
+
+vwap:
+  slope_bars: 15                       # A7.3
+
+levels:
+  swing_confirm_bars: 3                # A8.6
+  confluence_band_pts: 3.0             # A8.9
+  round_numbers: [50, 100, 250]        # A8.11
+  opening_range_min: [5, 15, 30]       # A8.4
+  initial_balance_min: 60              # A8.5
+  near_level_pts: 20                   # composite reads: levels considered "near"
+
+session:
+  gap_atr_days: 20                     # A9.1 gap as % of n-day ATR
+  open_type_window_min: 15             # A9.2
+  buckets:                             # A9.7 (ET)
+    open: ["09:30", "10:30"]
+    mid: ["10:30", "14:00"]
+    pm: ["14:00", "16:00"]
+    close: ["16:00", "16:30"]
+
+vol:
+  atr_days: 14                         # A10.3
+  vov_bars: 15                         # A10.4 1m realized-vol window vs session
+
+manage:
+  min_stop_pts: 15.0                   # A12.2 (MAE-1 — validated; do not tune casually)
+  overstay_mult: 2.0                   # A12.7 time-in-trade vs journal median flag
+
+journal:
+  violation_lookback_trades: 20        # A13.2
+  similar_trades_n: 5                  # A13.5
+  similar_price_band_pts: 10.0         # 13.1 approximation: entries within band
+  min_n_for_stats: 5                   # below this, stats are anecdotes

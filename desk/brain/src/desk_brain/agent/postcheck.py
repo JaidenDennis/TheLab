@@ -97,12 +97,27 @@ async def classify(client: AsyncAnthropic, model: str, question: str, reply: str
         return none
 
 
+DEFAULT_STALE_LINE = "Data's a few seconds behind — take this loosely."
+DEFAULT_OFFLINE_LINE = "I can't see the flow right now, so no call."
+DEFAULT_FRAMEWORK_CLAUSE = "that's the setup reading, not something we've proven"
+
+# Any of these already count as the plain honesty clause (voice B1.6).
+_FRAMEWORK_MARKER = re.compile(
+    r"(not something we'?ve proven|setup reading|haven'?t (?:tested|proven)|not (?:tested|proven) edge|discretionary)",
+    re.I,
+)
+
+
 def apply_rules(
     reply: str,
     classification: Classification,
     tools_used: list[str],
     any_stale: bool,
     factors: dict[str, Factor],
+    *,
+    stale_line: str = DEFAULT_STALE_LINE,
+    offline_line: str = DEFAULT_OFFLINE_LINE,
+    framework_clause: str = DEFAULT_FRAMEWORK_CLAUSE,
 ) -> CheckedResponse:
     text = reply
     rewritten = False
@@ -120,28 +135,28 @@ def apply_rules(
 
     # Rule 1 — an opinion with zero tool results this turn is not allowed to stand.
     if classification.has_opinion and not tools_used:
-        text = (
-            "I can't see the tape right now (no tool data reached me this turn), so no view. "
-            "Ask again and I'll pull live state first."
-        )
+        text = offline_line + " Ask again in a moment."
         rewritten = True
         classification = Classification(False, "none", None, None, None, None)
         return CheckedResponse(text=text, classification=classification, rewritten=rewritten)
 
-    # Rule 2 — discretionary factors named without the label get labeled.
-    if classification.has_opinion and "discretionary" not in text.lower():
+    # Rule 2 (voice B1.6) — an opinion leaning on discretionary factors carries
+    # the plain honesty clause, one clause, no jargon labels in the spoken text.
+    if classification.has_opinion and not _FRAMEWORK_MARKER.search(text):
         mentioned = [
             f.name
             for f in factors.values()
             if f.tag == "discretionary" and re.search(re.escape(f.name.split(" (")[0]), text, re.I)
         ]
         if mentioned:
-            text += f"\n\n(discretionary framework, not tested edge: {', '.join(mentioned)})"
+            text = text.rstrip()
+            text += (" " if text.endswith((".", "!", "?")) else ". ") + framework_clause.capitalize() + "."
             rewritten = True
 
-    # Rule 3 — stale data is the first line, not a footnote.
-    if any_stale and not text.lstrip().lower().startswith(("⚠", "stale", "warning")):
-        text = "⚠️ STALE — engine heartbeat >5s old; everything below is from the last snapshot.\n" + text
+    # Rule 3 (voice B1.7) — stale data is the first line, plainly.
+    first = text.lstrip().lower()
+    if any_stale and not first.startswith(("data's", "data is", "i can't see", "can't call")):
+        text = stale_line + "\n" + text
         rewritten = True
 
     return CheckedResponse(text=text, classification=classification, rewritten=rewritten)

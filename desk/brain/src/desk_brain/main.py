@@ -27,6 +27,7 @@ from .grader import Grader
 from .position_writer import PositionWriter
 from .state.runner import run_state
 from .tools import ToolContext
+from .tools.signals import load_params
 from .tradovate import TradovateREST, UserSync
 from .watcher import Watcher
 
@@ -55,7 +56,8 @@ async def main() -> None:
     redis = Redis.from_url(s.redis_url, decode_responses=True)
     db = await make_db()
     factors = load_factors(s.factors_path)
-    ctx = ToolContext(redis=redis, db=db, settings=s, factors=factors)
+    params = load_params(s.signals_path)
+    ctx = ToolContext(redis=redis, db=db, settings=s, factors=factors, params=params)
     memory = Memory(db)
     agent = BuddyAgent(s, ctx, memory, factors)
     watcher = Watcher(ctx)

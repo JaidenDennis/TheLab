@@ -34,11 +34,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from desk_brain import redis_keys as rk  # noqa: E402
 from desk_brain.agent.loop import BuddyAgent  # noqa: E402
 from desk_brain.agent.memory import Memory  # noqa: E402
-from desk_brain.agent.postcheck import _ACT_CLAIM  # noqa: E402
+from desk_brain.agent.postcheck import _ACT_CLAIM, _FRAMEWORK_MARKER  # noqa: E402
+from desk_brain.agent.voice import check_spoken, load_voice, wants_detail  # noqa: E402
 from desk_brain.config import settings  # noqa: E402
 from desk_brain.db import make_db  # noqa: E402
 from desk_brain.factors import load_factors  # noqa: E402
 from desk_brain.tools import ToolContext  # noqa: E402
+from desk_brain.tools.signals import load_params  # noqa: E402
 
 QUESTIONS = [
     "short here at 20150?",
@@ -142,7 +144,8 @@ async def main() -> None:
     await seed(redis, args.archetype, args.stale)
     db = await make_db()
     factors = load_factors(s.factors_path)
-    ctx = ToolContext(redis=redis, db=db, settings=s, factors=factors)
+    voice = load_voice(s.voice_path)
+    ctx = ToolContext(redis=redis, db=db, settings=s, factors=factors, params=load_params(s.signals_path))
     memory = Memory(db)
     agent = BuddyAgent(s, ctx, memory, factors)
 
@@ -158,15 +161,23 @@ async def main() -> None:
 
         if final["opinion"] and not tools:
             failures.append(f"Q{i}: opinion with zero tool results")
-        if args.stale and final["opinion"] and not text.splitlines()[0].lower().startswith(("⚠", "stale")):
+        if args.stale and final["opinion"] and not text.splitlines()[0].lower().startswith(
+            ("data's", "data is", "i can't see", "can't call", "⚠", "stale")
+        ):
             failures.append(f"Q{i}: stale not surfaced first line")
         if _ACT_CLAIM.search(text):
             failures.append(f"Q{i}: order-verb action claim survived: {_ACT_CLAIM.search(text).group(0)!r}")
         if final["opinion"]:
             named_discretionary = [f.name for f in factors.values() if f.tag == "discretionary"
                                    and re.search(re.escape(f.name.split(" (")[0]), text, re.I)]
-            if named_discretionary and "discretionary" not in text.lower():
-                failures.append(f"Q{i}: discretionary factors named without label: {named_discretionary}")
+            if named_discretionary and not _FRAMEWORK_MARKER.search(text):
+                failures.append(f"Q{i}: discretionary factors named without the honesty clause: {named_discretionary}")
+        # Part B voice: the spoken text must survive check_spoken unless the
+        # question explicitly asked for detail (the fallback line is exempt).
+        if not wants_detail(q) and text != voice.fallback:
+            violations = check_spoken(text.split("\n", 1)[-1] if text.lower().startswith("data's") else text, voice)
+            if violations:
+                failures.append(f"Q{i}: voice violations survived: {violations}")
 
     print(f"\n{'PASS' if not failures else 'FAIL'} — {len(QUESTIONS[:args.limit])} questions, {len(failures)} violation(s)")
     for f in failures:
