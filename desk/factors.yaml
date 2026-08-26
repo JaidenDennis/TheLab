@@ -1,0 +1,46 @@
+# Trading Desk — factor tag registry (spec §13).
+# Source of truth for which factors carry tested edge. Tags change ONLY by
+# editing this file; the brain loads it at startup and the replay harness
+# asserts agent answers label factors to match.
+#
+# tag: validated    — a repo study justifies it; cite the study.
+# tag: discretionary — framework, not tested edge. The buddy must say so.
+
+factors:
+  - key: flow_impulse_qrank
+    name: Flow impulse Q-rank
+    tag: validated
+    study: TFR / fc_t13
+    note: Impulse quantile vs the fc_t13 reference distribution; Q90+ is the confirm threshold.
+
+  - key: stop_viability
+    name: Stop viability >= 15 pts
+    tag: validated
+    study: MAE-1
+    note: Stops tighter than 15 pts are inside noise per MAE-1; grading uses the 10 pt MFE/MAE race.
+
+  - key: positive_gamma_penalty
+    name: Positive-gamma penalty
+    tag: validated
+    study: three sightings (GFM track)
+    note: Positive gamma regime is EV-negative for breakout-style entries in all sightings.
+
+  - key: htf_sweep
+    name: HTF sweep
+    tag: discretionary
+
+  - key: level_hierarchy
+    name: Level hierarchy (PDH/PDL, PWH/PWL, 4H swings, ON H/L)
+    tag: discretionary
+
+  - key: amd_phase
+    name: AMD phase
+    tag: discretionary
+
+  - key: value_area_position
+    name: Value-area position (VAH/POC/VAL)
+    tag: discretionary
+
+  - key: day_type_classifier
+    name: Day-type classifier
+    tag: discretionary

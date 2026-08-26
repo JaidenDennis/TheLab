@@ -1,0 +1,63 @@
+# Render blueprint for the Trading Desk (spec §3).
+# desk-web (Next.js) + desk-brain (Python worker) + Key Value (Redis).
+# NOTE: var/ (flow history, gamma archive) is gitignored — see desk/README.md
+# "Brain data caveat" before deploying desk-brain to Render.
+
+services:
+  - type: web
+    name: desk-web
+    runtime: node
+    rootDir: desk/web
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ALLOWED_EMAIL
+        sync: false
+      - key: BRAIN_URL
+        sync: false
+      - key: BRAIN_SHARED_SECRET
+        sync: false
+
+  - type: worker
+    name: desk-brain
+    runtime: python
+    # Needs the whole repo (imports nq_agent); build from the repo root.
+    # Must be on a plan tier that never sleeps (spec §23).
+    buildCommand: pip install uv && cd desk/brain && uv sync
+    startCommand: cd desk/brain && uv run python -m desk_brain.main
+    envVars:
+      - key: REDIS_URL
+        fromService: { type: keyvalue, name: desk-kv, property: connectionString }
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DATABENTO_API_KEY
+        sync: false
+      - key: TRADOVATE_ENV
+        sync: false
+      - key: TRADOVATE_USERNAME
+        sync: false
+      - key: TRADOVATE_PASSWORD
+        sync: false
+      - key: TRADOVATE_CID
+        sync: false
+      - key: TRADOVATE_SECRET
+        sync: false
+      - key: BRAIN_SHARED_SECRET
+        sync: false
+      - key: WEB_URL
+        sync: false
+
+  - type: keyvalue
+    name: desk-kv
+    plan: free
+    ipAllowList: []
